@@ -1,0 +1,12 @@
+# Core serve
+vllm==0.6.0
+# Open WebUI desde Git (la instalación dispara build del frontend, de ahí Node.js temporal)
+git+https://github.com/open-webui/open-webui@v0.3.20
+
+# RAG: extracción + embeddings + vector DB
+pymupdf>=1.23.8
+chromadb>=0.5.5
+sentence-transformers>=3.0.0
+unstructured>=0.14.0
+python-docx>=0.8.11
+openpyxl>=3.1.2
