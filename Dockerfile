@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       software-properties-common \
       curl ca-certificates git bash tini wget gnupg \
       build-essential \
-  && rm -rf /var/lib/apt/lists/*
+      libgl1 libglib2.0-0 \   # <-- añade esto
+&& rm -rf /var/lib/apt/lists/*
 
 # 2) Python 3.11 (requerido por vLLM recientes)
 RUN add-apt-repository -y ppa:deadsnakes/ppa && \

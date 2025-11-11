@@ -1,9 +1,14 @@
+--index-url https://download.pytorch.org/whl/cu121
+
 # Core serve
 vllm==0.6.0
-# Open WebUI desde Git (la instalación dispara build del frontend, de ahí Node.js temporal)
+torch==2.3.1
+torchvision==0.18.1
+
+# Open WebUI (desde git)
 git+https://github.com/open-webui/open-webui@v0.3.20
 
-# RAG: extracción + embeddings + vector DB
+# RAG
 pymupdf>=1.23.8
 chromadb>=0.5.5
 sentence-transformers>=3.0.0
