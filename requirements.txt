@@ -3,7 +3,7 @@ vllm==0.6.0
 torch==2.3.1
 torchvision==0.18.1
 
-# Open WebUI desde Git (construye frontend)
+# Open WebUI (desde Git)
 git+https://github.com/open-webui/open-webui@v0.3.20
 
 # RAG
@@ -13,3 +13,4 @@ sentence-transformers>=3.0.0
 unstructured>=0.14.0
 python-docx>=0.8.11
 openpyxl>=3.1.2
+
