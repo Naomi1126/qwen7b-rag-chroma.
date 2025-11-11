@@ -10,7 +10,11 @@ on:
       - 'ingest.py'
       - 'search.py'
       - '.github/workflows/build-and-push.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+
+# Define la referencia de imagen una sola vez
+env:
+  IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/qwen7b-rag-chroma
 
 jobs:
   docker:
@@ -36,18 +40,22 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/qwen7b-rag-chroma
+          images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=v1
+            type=raw,value=v2
             type=sha
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          file: ./Dockerfile
           platforms: linux/amd64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/qwen7b-rag-chroma:buildcache
-          cache-to: type=registry,ref=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/qwen7b-rag-chroma:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+          # Evita fallos de "attestations/sbom" en algunos registries
+          provenance: false
+          sbom: false
