@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       software-properties-common \
       curl ca-certificates git bash tini wget gnupg \
       build-essential \
-      libgl1 libglib2.0-0 \   # <-- añade esto
+      libgl1 libglib2.0-0 \  
 && rm -rf /var/lib/apt/lists/*
 
 # 2) Python 3.11 (requerido por vLLM recientes)
