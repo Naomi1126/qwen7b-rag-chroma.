@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates git bash tini wget gnupg \
       build-essential \
       libgl1 libglib2.0-0 \  
-&& rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # 2) Python 3.11 (requerido por vLLM recientes)
 RUN add-apt-repository -y ppa:deadsnakes/ppa && \
@@ -28,13 +28,18 @@ RUN python3.11 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
 # 4) Node.js 18 (para compilar frontend de Open WebUI al instalarlo)
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get update && apt-get install -y --no-install-recommends nodejs && \
     node -v && npm -v
 
-# 5) Dependencias Python (vía requirements.txt)
+# 5) Dependencias Python (primero Torch con CUDA 12.1)
+RUN /opt/venv/bin/pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+      torch==2.3.1 torchvision==0.18.1
+
+# 5.1) Resto de dependencias (desde PyPI normal)
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
+
 
 # 6) Limpiar Node y caches para reducir peso (el frontend ya quedó construido)
 RUN apt-get purge -y nodejs && apt-get autoremove -y && \
