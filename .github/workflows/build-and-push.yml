@@ -12,7 +12,6 @@ on:
       - '.github/workflows/build-and-push.yml'
   workflow_dispatch:
 
-# Define la referencia de imagen una sola vez
 env:
   IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/qwen7b-rag-chroma
 
@@ -45,6 +44,18 @@ jobs:
             type=raw,value=v2
             type=sha
 
+      # 👇 Paso para liberar espacio en el runner
+      - name: Free up disk space on runner
+        run: |
+          echo "Disk before:"; df -h
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+          docker system prune -af || true
+          echo "Disk after:"; df -h
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -56,6 +67,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
-          # Evita fallos de "attestations/sbom" en algunos registries
           provenance: false
           sbom: false
