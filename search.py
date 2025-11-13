@@ -1,39 +1,92 @@
+import os
 import sys
-from sentence_transformers import SentenceTransformer
+from typing import List, Dict, Any
+
 import chromadb
-from chromadb.config import Settings
+from sentence_transformers import SentenceTransformer
 
-CHROMA_DIR = "/data/chroma"
-COLLECTION_NAME = "docs"
-EMBED_MODEL_NAME = "BAAI/bge-m3"
+# Debe ser el MISMO modelo que usaste en ingest.py
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 
-def search(query: str, top_k: int = 5):
-    model = SentenceTransformer(EMBED_MODEL_NAME)
-    emb = model.encode([query], normalize_embeddings=True).tolist()
-    client = chromadb.PersistentClient(path=CHROMA_DIR, settings=Settings(allow_reset=False))
-    coll = client.get_or_create_collection(COLLECTION_NAME)
-    res = coll.query(query_embeddings=emb, n_results=top_k, include=["documents", "metadatas", "distances", "ids"])
-    return res
+# Ruta donde ingest.py guarda la BD Chroma
+CHROMA_DIR = os.getenv("CHROMA_DIR", "/data/chroma")
 
-def pretty_print(res):
+# IMPORTANTE: debe ser el mismo nombre de colección que uses en ingest.py
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
+
+
+# ===========================
+# 1. Inicialización global
+# ===========================
+
+print(f"[SEARCH] Usando embeddings: {EMBEDDING_MODEL_NAME}")
+print(f"[SEARCH] Usando Chroma en: {CHROMA_DIR}")
+print(f"[SEARCH] Colección: {COLLECTION_NAME}")
+
+_embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+_client = chromadb.PersistentClient(path=CHROMA_DIR)
+_collection = _client.get_or_create_collection(name=COLLECTION_NAME)
+
+
+# ===========================
+# 2. Función principal de búsqueda
+# ===========================
+
+def search_docs(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Hace búsqueda semántica en Chroma y regresa una lista de resultados:
+    [
+      {
+        "text": <chunk>,
+        "metadata": <dict>,
+        "distance": <float>
+      },
+      ...
+    ]
+    """
+    emb = _embedder.encode([query]).tolist()
+
+    res = _collection.query(
+        query_embeddings=emb,
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"],
+    )
+
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
-    ids   = res.get("ids", [[]])[0]
 
-    for i, (doc, meta, dist, _id) in enumerate(zip(docs, metas, dists, ids), 1):
-        loc = meta.get("path", "?")
-        p   = meta.get("page", None)
-        t   = meta.get("type", "?")
-        where = f"{loc}" + (f" [p.{p}]" if p else "")
-        print(f"\n[{i}] score={1 - dist:.4f}  ({t})  {where}")
-        print("-"*80)
-        print(doc[:600] + ("..." if len(doc) > 600 else ""))
+    results: List[Dict[str, Any]] = []
+    for doc, meta, dist in zip(docs, metas, dists):
+        results.append(
+            {
+                "text": doc,
+                "metadata": meta if isinstance(meta, dict) else {},
+                "distance": float(dist),
+            }
+        )
+    return results
+
+
+# ===========================
+# 3. Modo consola (para pruebas)
+# ===========================
+
+def pretty_print_results(results: List[Dict[str, Any]]) -> None:
+    for i, r in enumerate(results, start=1):
+        print(f"\n=== Resultado #{i} (distancia: {r['distance']:.4f}) ===")
+        fuente = r["metadata"].get("source")
+        if fuente:
+            print(f"Fuente: {fuente}")
+        print(r["text"][:1000])  # solo los primeros caracteres
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: python search.py \"tu consulta\"", file=sys.stderr)
+        print('Uso: python search.py "tu pregunta aquí"')
         sys.exit(1)
-    q = " ".join(sys.argv[1:])
-    res = search(q, top_k=5)
-    pretty_print(res)
+
+    q = sys.argv[1]
+    print(f"[SEARCH] Consulta: {q}")
+    results = search_docs(q, top_k=5)
+    pretty_print_results(results)
