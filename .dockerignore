@@ -2,6 +2,8 @@
 .github
 __pycache__/
 *.pyc
-*.pyo
-*.DS_Store
+.env
+.env.*
+.vscode
+.idea
 /data/
