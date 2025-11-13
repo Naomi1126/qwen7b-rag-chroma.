@@ -44,7 +44,7 @@ jobs:
             type=raw,value=v2
             type=sha
 
-      # 👇 Paso para liberar espacio en el runner
+      #  Paso para liberar espacio en el runner
       - name: Free up disk space on runner
         run: |
           echo "Disk before:"; df -h
