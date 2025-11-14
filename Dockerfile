@@ -51,10 +51,9 @@ RUN apt-get purge -y build-essential python3.11-dev && \
 RUN useradd -m app && chown -R app:app /workspace && \
     mkdir -p /data/docs /data/chroma && chown -R app:app /data
 
-# 8) Scripts del proyecto
-COPY --chown=app:app start.sh /workspace/start.sh
-COPY --chown=app:app ingest.py /workspace/ingest.py
-COPY --chown=app:app search.py /workspace/search.py
+# 8) Código del proyecto (todos los .py, start.sh, etc.)
+COPY --chown=app:app . /workspace/
+
 RUN chmod +x /workspace/start.sh
 
 USER app
