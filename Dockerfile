@@ -52,9 +52,14 @@ RUN useradd -m app && chown -R app:app /workspace && \
     mkdir -p /data/docs /data/chroma && chown -R app:app /data
 
 # 8) Código del proyecto (todos los .py, start.sh, etc.)
-COPY --chown=app:app . /workspace/
+COPY --chown=app:app start.sh /workspace/start.sh
+COPY --chown=app:app ingest.py /workspace/ingest.py
+COPY --chown=app:app search.py /workspace/search.py
+COPY --chown=app:app app.py /workspace/app.py
+COPY --chown=app:app rag_core.py /workspace/rag_core.py
 
 RUN chmod +x /workspace/start.sh
+
 
 USER app
 EXPOSE 8000 8090
