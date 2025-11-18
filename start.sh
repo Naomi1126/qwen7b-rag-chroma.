@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${MODEL:=Qwen/Qwen2-14B-Instruct}"
+: "${MODEL:=Qwen/Qwen2.5-7B-Instruct}"
 : "${HF_HOME:=/workspace/hf}"
-: "${MAX_MODEL_LEN:=16384}"
-: "${GPU_MEM_UTIL:=0.90}"
+: "${MAX_MODEL_LEN:=4096}"
+: "${GPU_MEM_UTIL:=0.75}"
 : "${SWAP_SPACE_GB:=20}"
 : "${OPENAI_API_KEY:=dummy}"
 : "${OPENAI_API_BASE:=http://127.0.0.1:8000/v1}"
