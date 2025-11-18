@@ -7,12 +7,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WEBUI_PORT=8090 \
     PATH="/opt/venv/bin:${PATH}"
 
+# Directorio de trabajo principal
 WORKDIR /workspace
 
-# 1) Paquetes base (incluye libs para OpenCV)
+# 1) Paquetes base (incluye libs para OpenCV, curl para healthcheck, tini si lo quisieras luego)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       software-properties-common \
-      curl ca-certificates git bash tini wget gnupg \
+      curl ca-certificates git bash wget gnupg \
       build-essential \
       libgl1 libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/*
@@ -39,13 +40,11 @@ RUN /opt/venv/bin/pip install --no-cache-dir --no-deps open-webui==0.3.25
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
 
-# ---------- PASO DE LIMPIEZA PARA REDUCIR TAMAÑO ----------
-# Purga toolchains de compilación y limpia caches/apt (reduce varios cientos de MB)
-USER root
+# ---------- LIMPIEZA PARA REDUCIR TAMAÑO ----------
 RUN apt-get purge -y build-essential python3.11-dev && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
-# ----------------------------------------------------------
+# ---------------------------------------------------
 
 # 7) Usuario no-root y directorios de datos
 RUN useradd -m app && chown -R app:app /workspace && \
@@ -58,11 +57,14 @@ COPY --chown=app:app search.py /workspace/search.py
 COPY --chown=app:app app.py /workspace/app.py
 COPY --chown=app:app rag_core.py /workspace/rag_core.py
 
-RUN chmod +x /workspace/start.sh
+# Asegurar que los scripts claves sean ejecutables
+RUN chmod +x /workspace/start.sh /workspace/ingest.py /workspace/search.py /workspace/app.py /workspace/rag_core.py
 
-
+# Cambiamos a usuario app
 USER app
+
+# Puertos que va a usar el contenedor
 EXPOSE 8000 8090
 
-ENTRYPOINT ["/usr/bin/tini","-g","--"]
-CMD ["/workspace/start.sh"]
+# Que el contenedor ARRANQUE directamente con start.sh
+ENTRYPOINT ["/workspace/start.sh"]
