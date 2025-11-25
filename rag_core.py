@@ -1,21 +1,34 @@
-# rag_core.py
 import os
-from typing import List, Dict, Any
+import sys
+from typing import List, Dict, Any, Optional
 
 import requests
 from search import search_docs
 
-# Endpoint de vLLM (OpenAI-compatible)
+# Endpoint de vLLM 
 VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
 VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "qwen")
 
+# Área por defecto 
+DEFAULT_AREA = os.getenv("AREA", None)
 
-def build_context(query: str, top_k: int = 5) -> Dict[str, Any]:
+
+def build_context(
+    query: str,
+    top_k: int = 5,
+    area: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Usa search_docs() para traer contexto y lo concatena en un string.
+    Respeta el área (logistica, ventas, sistemas, etc.).
     Regresa también los 'sources' para debug.
     """
-    results = search_docs(query, top_k=top_k)
+    if area is None:
+        area = DEFAULT_AREA
+
+    print(f"[RAG] build_context() → área: {area if area else '(global)'}")
+
+    results = search_docs(query, top_k=top_k, area=area)
 
     chunks: List[str] = []
     sources: List[Dict[str, Any]] = []
@@ -27,32 +40,43 @@ def build_context(query: str, top_k: int = 5) -> Dict[str, Any]:
 
         chunks.append(text)
 
-        sources.append(
-            {
-                "source": meta.get("source"),
-                "distance": distance,
-                "preview": text[:200],
-            }
-        )
+        # Tomamos algunos metadatos útiles: path, type, sheet, etc.
+        source_info = {
+            "path": meta.get("path"),
+            "type": meta.get("type"),
+            "sheet": meta.get("sheet"),
+            "distance": distance,
+            "preview": text[:200],
+        }
+
+        if "source" in meta:
+            source_info["source"] = meta["source"]
+
+        sources.append(source_info)
 
     context = "\n\n---\n\n".join(chunks)
     return {
         "context": context,
         "sources": sources,
+        "area": area,
     }
 
 
-def call_model_with_context(user_query: str, context: str) -> str:
+def call_model_with_context(user_query: str, context: str, area: Optional[str] = None) -> str:
     """
     Llama al modelo Qwen vía API vLLM usando el contexto como soporte.
     """
     system_prompt = (
         "Eres un asistente experto que responde ÚNICAMENTE con base en la "
         "información del contexto proporcionado. "
-        "Si la respuesta no está en el contexto, dilo claramente."
+        "Si la respuesta no está en el contexto, dilo claramente. "
+        "Si la pregunta está fuera del ámbito del área de trabajo, también indícalo."
     )
 
+    area_text = f"(Área: {area})\n\n" if area else ""
+
     user_content = (
+        f"{area_text}"
         f"Contexto de soporte (extraído de documentos internos):\n\n"
         f"{context}\n\n"
         f"Pregunta del usuario:\n{user_query}\n\n"
@@ -76,32 +100,63 @@ def call_model_with_context(user_query: str, context: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def answer_with_rag(user_query: str, top_k: int = 5) -> Dict[str, Any]:
+def answer_with_rag(
+    user_query: str,
+    top_k: int = 5,
+    area: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Flujo completo:
-      1) Buscar contexto en Chroma.
+      1) Buscar contexto en Chroma (respetando el área).
       2) Llamar a Qwen con ese contexto.
-      3) Regresar respuesta + contexto + fuentes.
+      3) Regresar respuesta + contexto + fuentes + área.
     """
-    ctx = build_context(user_query, top_k=top_k)
+    ctx = build_context(user_query, top_k=top_k, area=area)
     context = ctx["context"]
     sources = ctx["sources"]
+    used_area = ctx["area"]
 
-    answer = call_model_with_context(user_query, context)
+    answer = call_model_with_context(user_query, context, area=used_area)
 
     return {
         "answer": answer,
         "context": context,
         "sources": sources,
+        "area": used_area,
     }
 
 
 if __name__ == "__main__":
-    q = "¿Qué prompts recomienda el área comercial para ventas y servicio?"
+    """
+    Uso desde consola:
+
+      python rag_core.py                 → usa pregunta por defecto y área por defecto (ENV AREA)
+      python rag_core.py "pregunta"      → usa esa pregunta y área por defecto
+      python rag_core.py "pregunta" logistica  → usa esa pregunta y área 'logistica'
+    """
+    if len(sys.argv) >= 2:
+        q = sys.argv[1]
+    else:
+        q = "¿Qué prompts recomienda el área comercial para ventas y servicio?"
+
+    area_arg: Optional[str] = sys.argv[2] if len(sys.argv) >= 3 else None
+
     print(f"[RAG] Pregunta: {q}")
-    result = answer_with_rag(q, top_k=5)
+    if area_arg:
+        print(f"[RAG] Área CLI: {area_arg}")
+    elif DEFAULT_AREA:
+        print(f"[RAG] Área por defecto (ENV): {DEFAULT_AREA}")
+    else:
+        print("[RAG] Sin área (modo global).")
+
+    result = answer_with_rag(q, top_k=5, area=area_arg)
+
     print("\n=== RESPUESTA ===\n")
     print(result["answer"])
+
+    print("\n=== ÁREA USADA ===\n")
+    print(result["area"])
+
     print("\n=== FUENTES ===\n")
     for s in result["sources"]:
         print(s)
