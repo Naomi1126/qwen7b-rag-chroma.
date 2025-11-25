@@ -63,16 +63,38 @@ def extract_docx(p: Path) -> List[Dict]:
 
 def extract_xlsx(p: Path) -> List[Dict]:
     wb = openpyxl.load_workbook(str(p), data_only=True)
-    texts = []
+    out = []
+
     for ws in wb.worksheets:
-        rows = []
-        for r in ws.iter_rows(values_only=True):
-            vals = ["" if v is None else str(v) for v in r]
-            rows.append("\t".join(vals))
-        sheet_txt = (f"# Hoja: {ws.title}\n" + "\n".join(rows)).strip()
-        if sheet_txt:
-            texts.extend(chunk_text(sheet_txt))
-    return [{"text": t, "metadata": {"path": str(p), "type": "xlsx"}} for t in texts]
+        headers = []
+        sheet_lines = []
+
+        # Extraemos encabezados de la primera fila
+        for cell in next(ws.iter_rows(values_only=True)):
+            headers.append("" if cell is None else str(cell).strip())
+
+        # Procesamos el resto de filas
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            parts = []
+            for col_name, value in zip(headers, r):
+                if col_name.strip() == "":
+                    continue  # ignorar columnas sin nombre
+                val = "" if value is None else str(value).strip()
+                parts.append(f"{col_name}: {val}")
+            if parts:
+                sheet_lines.append(" | ".join(parts))
+
+        # Construimos todo el texto de la hoja
+        text = f"=== Hoja: {ws.title} ===\n" + "\n".join(sheet_lines)
+
+        # Chunking de ese texto
+        for ch in chunk_text(text):
+            out.append({
+                "text": ch,
+                "metadata": {"path": str(p), "type": "xlsx", "sheet": ws.title}
+            })
+
+    return out
 
 def extract_txt(p: Path) -> List[Dict]:
     txt = Path(p).read_text(encoding="utf-8", errors="ignore")
