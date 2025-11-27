@@ -3,14 +3,14 @@ FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive \
     HF_HOME=/workspace/hf \
     VLLM_WORKSPACE=/workspace \
-    OPENAI_API_BASE=http://127.0.0.1:8000/v1 \
+    VLLM_MODEL_NAME="Qwen/Qwen2.5-7B-Instruct" \
+    VLLM_API_URL="http://127.0.0.1:8000/v1/chat/completions" \
     WEBUI_PORT=8090 \
     PATH="/opt/venv/bin:${PATH}"
 
-# Directorio de trabajo principal
 WORKDIR /workspace
 
-# 1) Paquetes base (incluye libs para OpenCV, curl para healthcheck, tini si lo quisieras luego)
+# 1) Paquetes base
 RUN apt-get update && apt-get install -y --no-install-recommends \
       software-properties-common \
       curl ca-certificates git bash wget gnupg \
@@ -24,47 +24,45 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa && \
       python3.11 python3.11-venv python3.11-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# 3) Virtualenv + pip toolchain
+# 3) Virtualenv
 RUN python3.11 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-# 4) Torch CUDA 12.1 (aparte para evitar conflictos del resolver)
+# 4) Torch + vLLM + pyairports (¡muy importante el orden!)
 RUN /opt/venv/bin/pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu121 \
-    torch==2.4.1 torchvision==0.19.1
+    torch==2.4.0 torchvision==0.19.0 && \
+    /opt/venv/bin/pip install --no-cache-dir \
+    vllm==0.6.0 outlines==0.0.46 pyairports==0.0.1
 
-# 5) Open WebUI SIN dependencias (evita que instale su propio torch)
+# 5) Open-WebUI sin deps pesadas
 RUN /opt/venv/bin/pip install --no-cache-dir --no-deps open-webui==0.3.25
 
-# 6) Resto de dependencias (NO incluir torch ni open-webui en requirements.txt)
+# 6) Dependencias de TU proyecto (no meter torch, vllm, transformers, etc.)
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
 
-# ---------- LIMPIEZA PARA REDUCIR TAMAÑO ----------
+# 7) Limpieza para reducir tamaño
 RUN apt-get purge -y build-essential python3.11-dev && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
-# ---------------------------------------------------
 
-# 7) Usuario no-root y directorios de datos
+# 8) Usuario no-root + directorios de datos
 RUN useradd -m app && chown -R app:app /workspace && \
     mkdir -p /data/docs /data/chroma && chown -R app:app /data
 
-# 8) Código del proyecto (todos los .py, start.sh, etc.)
+# 9) Código del proyecto
 COPY --chown=app:app start.sh /workspace/start.sh
 COPY --chown=app:app ingest.py /workspace/ingest.py
 COPY --chown=app:app search.py /workspace/search.py
 COPY --chown=app:app app.py /workspace/app.py
 COPY --chown=app:app rag_core.py /workspace/rag_core.py
 
-# Asegurar que los scripts claves sean ejecutables
 RUN chmod +x /workspace/start.sh /workspace/ingest.py /workspace/search.py /workspace/app.py /workspace/rag_core.py
 
-# Cambiamos a usuario app
 USER app
 
-# Puertos que va a usar el contenedor
 EXPOSE 8000 8090
 
-# Que el contenedor ARRANQUE directamente con start.sh
 ENTRYPOINT ["/workspace/start.sh"]
+

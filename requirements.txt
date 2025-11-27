@@ -1,13 +1,14 @@
-# Core serve (vLLM sin Torch aquí)
-vllm==0.6.0
+fastapi==0.111.0
+uvicorn[standard]==0.30.3
 
-# Open WebUI desde PyPI (sin compilar)
-open-webui==0.3.26
+# RAG propio
+chromadb==0.5.5
+sentence-transformers==3.0.1
+pymupdf==1.24.10
+python-docx==1.1.2
+openpyxl==3.1.5
+pandas==2.2.2
 
-# RAG
-pymupdf>=1.23.8
-chromadb>=0.5.5
-sentence-transformers>=3.0.1
-unstructured>=0.14.0
-python-docx>=0.8.11
-openpyxl>=3.1.2
+# Utilidades varias que uses
+tqdm
+
