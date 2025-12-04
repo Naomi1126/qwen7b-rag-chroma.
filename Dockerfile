@@ -28,6 +28,11 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa && \
 RUN python3.11 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
+# 3b) Node.js 18 + Yarn (para AnythingLLM)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get update && apt-get install -y nodejs && \
+    npm install -g yarn
+
 # 4) Torch + vLLM + pyairports (¡muy importante el orden!)
 RUN /opt/venv/bin/pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu121 \
@@ -35,12 +40,24 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
     /opt/venv/bin/pip install --no-cache-dir \
     vllm==0.6.0 outlines==0.0.46 pyairports==0.0.1
 
-# 5) Open-WebUI sin deps pesadas
-RUN /opt/venv/bin/pip install --no-cache-dir --no-deps open-webui==0.3.25
+# 5) Open-WebUI (lo dejamos instalado aunque no lo lancemos por defecto)
+RUN /opt/venv/bin/pip install --no-cache-dir open-webui==0.3.25
 
-# 6) Dependencias de TU proyecto (no meter torch, vllm, transformers, etc.)
+# 6) Dependencias de TU proyecto Python
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
+
+# 6b) AnythingLLM bare-metal
+RUN git clone https://github.com/Mintplex-Labs/anything-llm.git /workspace/anything-llm && \
+    cd /workspace/anything-llm && \
+    yarn setup && \
+    cp server/.env.example server/.env && \
+    mkdir -p /workspace/anything-llm/storage && \
+    echo 'STORAGE_DIR=/workspace/anything-llm/storage' >> server/.env && \
+    cd frontend && yarn build && cd .. && \
+    rm -rf server/public && cp -R frontend/dist server/public && \
+    cd server && npx prisma generate --schema=./prisma/schema.prisma && \
+    npx prisma migrate deploy --schema=./prisma/schema.prisma
 
 # 7) Limpieza para reducir tamaño
 RUN apt-get purge -y build-essential python3.11-dev && \
@@ -62,7 +79,6 @@ RUN chmod +x /workspace/start.sh /workspace/ingest.py /workspace/search.py /work
 
 USER app
 
-EXPOSE 8000 8090
+EXPOSE 8000 8090 3001 9001
 
 ENTRYPOINT ["/workspace/start.sh"]
-

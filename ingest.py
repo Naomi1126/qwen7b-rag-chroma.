@@ -16,7 +16,7 @@ from chromadb.config import Settings
 BASE_DATA_DIR = Path(os.getenv("DATA_DIR", "/data/docs"))
 BASE_CHROMA_DIR = os.getenv("CHROMA_DIR", "/data/chroma")
 
-# Nombre base de colección 
+# Nombre base de colección
 BASE_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
 
 # Modelo de embeddings
@@ -58,62 +58,96 @@ def extract_pdf(p: Path) -> List[Dict]:
         for i, page in enumerate(doc):
             txt = page.get_text("text")
             for j, ch in enumerate(chunk_text(txt)):
-                out.append({
-                    "text": ch,
-                    "metadata": {"path": str(p), "type": "pdf", "page": i + 1, "chunk": j},
-                })
+                out.append(
+                    {
+                        "text": ch,
+                        "metadata": {
+                            "path": str(p),
+                            "type": "pdf",
+                            "page": i + 1,
+                            "chunk": j,
+                        },
+                    }
+                )
     return out
 
 
 def extract_docx(p: Path) -> List[Dict]:
     d = docx.Document(str(p))
     txt = "\n".join([para.text for para in d.paragraphs])
-    return [{"text": ch, "metadata": {"path": str(p), "type": "docx"}} for ch in chunk_text(txt)]
+    return [
+        {
+            "text": ch,
+            "metadata": {"path": str(p), "type": "docx"},
+        }
+        for ch in chunk_text(txt)
+    ]
 
 
 def extract_xlsx(p: Path) -> List[Dict]:
+    """
+    Extrae cada FILA de la hoja de cálculo como un registro independiente.
+
+    Formato:
+    "Hoja: NombreHoja | Fila: N | Columna1: valor | Columna2: valor | ..."
+    """
     wb = openpyxl.load_workbook(str(p), data_only=True)
-    out = []
+    out: List[Dict] = []
 
     for ws in wb.worksheets:
-        headers = []
-        sheet_lines = []
-
-        # Extraemos encabezados de la primera fila
-        first_row = next(ws.iter_rows(values_only=True), None)
+        # Encabezados (1a fila)
+        first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
         if first_row is None:
             continue
 
+        headers: List[str] = []
         for cell in first_row:
             headers.append("" if cell is None else str(cell).strip())
 
-        # Procesamos el resto de filas
-        for r in ws.iter_rows(min_row=2, values_only=True):
-            parts = []
-            for col_name, value in zip(headers, r):
-                if col_name.strip() == "":
-                    continue  # ignorar columnas sin nombre
-                val = "" if value is None else str(value).strip()
-                parts.append(f"{col_name}: {val}")
-            if parts:
-                sheet_lines.append(" | ".join(parts))
+        # Filas de datos
+        for row_idx, row_values in enumerate(
+            ws.iter_rows(min_row=2, values_only=True), start=2
+        ):
+            parts: List[str] = []
+            for col_name, value in zip(headers, row_values):
+                if not col_name or not col_name.strip():
+                    continue
+                if value is None:
+                    continue
+                val_str = str(value).strip()
+                if val_str == "":
+                    continue
+                parts.append(f"{col_name}: {val_str}")
 
-        # Construimos todo el texto de la hoja
-        text = f"=== Hoja: {ws.title} ===\n" + "\n".join(sheet_lines)
+            if not parts:
+                continue
 
-        # Chunking de ese texto
-        for ch in chunk_text(text):
-            out.append({
-                "text": ch,
-                "metadata": {"path": str(p), "type": "xlsx", "sheet": ws.title},
-            })
+            row_text = f"Hoja: {ws.title} | Fila: {row_idx} | " + " | ".join(parts)
+
+            out.append(
+                {
+                    "text": row_text,
+                    "metadata": {
+                        "path": str(p),
+                        "type": "xlsx",
+                        "sheet": ws.title,
+                        "row": row_idx,
+                    },
+                }
+            )
 
     return out
 
 
 def extract_txt(p: Path) -> List[Dict]:
     txt = Path(p).read_text(encoding="utf-8", errors="ignore")
-    return [{"text": ch, "metadata": {"path": str(p), "type": "txt"}} for ch in chunk_text(txt)]
+    return [
+        {
+            "text": ch,
+            "metadata": {"path": str(p), "type": "txt"},
+        }
+        for ch in chunk_text(txt)
+    ]
 
 
 def extract_any(p: Path) -> List[Dict]:
@@ -137,8 +171,10 @@ def parse_args() -> argparse.Namespace:
         "--area",
         type=str,
         default=os.getenv("AREA"),
-        help="Área a indexar (logistica, ventas, sistemas, etc.). "
-             "Si se omite, se usa el modo 'global' sin área.",
+        help=(
+            "Área a indexar (logistica, ventas, sistemas, etc.). "
+            "Si se omite, se usa el modo 'global' sin área."
+        ),
     )
     return parser.parse_args()
 
@@ -147,7 +183,6 @@ def main():
     args = parse_args()
     area = args.area
 
-    # Definimos rutas y nombre de colección según haya área o no
     if area:
         data_dir = BASE_DATA_DIR / area
         chroma_dir = os.path.join(BASE_CHROMA_DIR, area)
@@ -158,7 +193,10 @@ def main():
         collection_name = BASE_COLLECTION_NAME
 
     if not data_dir.exists():
-        print(f"[ERROR] No existe {data_dir}. Crea la carpeta y coloca documentos.", file=sys.stderr)
+        print(
+            f"[ERROR] No existe {data_dir}. Crea la carpeta y coloca documentos.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"[INFO] Área: {area if area else '(global sin área)'}")
@@ -173,7 +211,7 @@ def main():
     coll = client.get_or_create_collection(collection_name)
     print(f"[INFO] Colección: {collection_name}")
 
-    files = []
+    files: List[Path] = []
     for root, _, fs in os.walk(data_dir):
         for name in fs:
             p = Path(root) / name
@@ -181,7 +219,10 @@ def main():
                 files.append(p)
 
     if not files:
-        print(f"[WARN] No se encontraron archivos soportados en {data_dir}.", file=sys.stderr)
+        print(
+            f"[WARN] No se encontraron archivos soportados en {data_dir}.",
+            file=sys.stderr,
+        )
         sys.exit(0)
 
     added = 0

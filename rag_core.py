@@ -7,23 +7,8 @@ from requests import RequestException
 
 from search import search_docs
 
-# ==========================
-# Configuración del modelo
-# ==========================
-
-# Endpoint de vLLM (OpenAI compatible)
-VLLM_API_URL = os.getenv(
-    "VLLM_API_URL",
-    "http://127.0.0.1:8000/v1/chat/completions"
-)
-
-# Nombre del modelo tal como lo ve vLLM
-VLLM_MODEL_NAME = os.getenv(
-    "VLLM_MODEL_NAME",
-    "Qwen/Qwen2.5-7B-Instruct"
-)
-
-# Área por defecto (opcional), se puede setear en ENV AREA=logistica, etc.
+VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
+VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
 DEFAULT_AREA = os.getenv("AREA", None)
 
 
@@ -32,11 +17,6 @@ def build_context(
     top_k: int = 5,
     area: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Usa search_docs() para traer contexto desde Chroma y lo concatena en un string.
-    Respeta el área (logistica, ventas, sistemas, etc.).
-    Regresa también los 'sources' para debug.
-    """
     if area is None:
         area = DEFAULT_AREA
 
@@ -55,11 +35,13 @@ def build_context(
 
         chunks.append(text)
 
-        source_info = {
+        source_info: Dict[str, Any] = {
             "path": meta.get("path"),
             "type": meta.get("type"),
             "sheet": meta.get("sheet"),
-            "distance": distance,
+            "row": meta.get("row"),
+            "page": meta.get("page"),
+            "distance": float(distance) if distance is not None else None,
             "preview": text[:200],
         }
 
@@ -82,15 +64,22 @@ def call_model_with_context(
     context: str,
     area: Optional[str] = None,
 ) -> str:
-    """
-    Llama al modelo Qwen vía API vLLM usando el contexto como soporte.
-    """
+    if not context.strip():
+        return (
+            "No encontré información relevante en los documentos indexados "
+            "para responder esta pregunta."
+        )
 
     system_prompt = (
         "Eres un asistente experto que responde ÚNICAMENTE con base en la "
         "información del contexto proporcionado. "
         "Si la respuesta no está en el contexto, dilo claramente. "
-        "Si la pregunta está fuera del ámbito del área de trabajo, también indícalo."
+        "Si la pregunta está fuera del ámbito del área de trabajo, también indícalo.\n\n"
+        "En el contexto pueden aparecer datos provenientes de hojas de cálculo. "
+        "Cada fila de Excel se representa típicamente como:\n"
+        "'Hoja: NOMBRE_HOJA | Fila: NUMERO | Columna1: valor | Columna2: valor | ...'.\n"
+        "Interpreta correctamente filas y columnas para contestar con precisión, "
+        "mencionando la hoja e idealmente la fila cuando sea relevante."
     )
 
     area_text = f"(Área: {area})\n\n" if area else ""
@@ -121,9 +110,7 @@ def call_model_with_context(
         resp.raise_for_status()
         data = resp.json()
     except RequestException as e:
-        # Log para debug en servidor
         print(f"[RAG] ERROR al llamar a vLLM: {e}", file=sys.stderr)
-        # Mensaje claro para el usuario / capa superior
         raise RuntimeError(f"Error al llamar al modelo vLLM: {e}") from e
 
     try:
@@ -138,12 +125,6 @@ def answer_with_rag(
     top_k: int = 5,
     area: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Flujo completo:
-      1) Buscar contexto en Chroma (respetando el área).
-      2) Llamar a Qwen con ese contexto usando vLLM.
-      3) Regresar respuesta + contexto + fuentes + área.
-    """
     print(f"[RAG] answer_with_rag() → query: {user_query}")
     print(f"[RAG] Área solicitada: {area if area else '(sin especificar)'}")
 
@@ -160,47 +141,3 @@ def answer_with_rag(
         "sources": sources,
         "area": used_area,
     }
-
-
-if __name__ == "__main__":
-    """
-    Uso desde consola:
-
-      python rag_core.py
-        → usa pregunta por defecto y área por defecto (ENV AREA)
-
-      python rag_core.py "pregunta"
-        → usa esa pregunta y área por defecto
-
-      python rag_core.py "pregunta" logistica
-        → usa esa pregunta y área 'logistica'
-    """
-    if len(sys.argv) >= 2:
-        q = sys.argv[1]
-    else:
-        q = "¿Qué prompts recomienda el área comercial para ventas y servicio?"
-
-    area_arg: Optional[str] = sys.argv[2] if len(sys.argv) >= 3 else None
-
-    print(f"[RAG] Pregunta: {q}")
-    if area_arg:
-        print(f"[RAG] Área CLI: {area_arg}")
-    elif DEFAULT_AREA:
-        print(f"[RAG] Área por defecto (ENV): {DEFAULT_AREA}")
-    else:
-        print("[RAG] Sin área (modo global).")
-
-    print(f"[RAG] VLLM_API_URL = {VLLM_API_URL}")
-    print(f"[RAG] VLLM_MODEL_NAME = {VLLM_MODEL_NAME}")
-
-    result = answer_with_rag(q, top_k=5, area=area_arg)
-
-    print("\n=== RESPUESTA ===\n")
-    print(result["answer"])
-
-    print("\n=== ÁREA USADA ===\n")
-    print(result["area"])
-
-    print("\n=== FUENTES ===\n")
-    for s in result["sources"]:
-        print(s)
