@@ -82,12 +82,9 @@ COPY --chown=app:app ingest.py /workspace/ingest.py
 COPY --chown=app:app search.py /workspace/search.py
 COPY --chown=app:app app.py /workspace/app.py
 COPY --chown=app:app rag_core.py /workspace/rag_core.py
-
-# >>> NUEVO: si ya tienes estos archivos para auth/BD, cópialos aquí
-# (si aún no los tienes, puedes comentar estas líneas hasta crearlos)
-# COPY --chown=app:app auth.py /workspace/auth.py
-# COPY --chown=app:app models.py /workspace/models.py
-# COPY --chown=app:app database.py /workspace/database.py
+COPY --chown=app:app auth.py /workspace/auth.py
+COPY --chown=app:app models.py /workspace/models.py
+COPY --chown=app:app database.py /workspace/database.py
 
 RUN chmod +x /workspace/start.sh /workspace/ingest.py /workspace/search.py /workspace/app.py /workspace/rag_core.py
 
