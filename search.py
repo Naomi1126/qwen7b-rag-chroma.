@@ -8,11 +8,9 @@ from sentence_transformers import SentenceTransformer
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 
 BASE_CHROMA_DIR = os.getenv("CHROMA_DIR", "/data/chroma")
-
 BASE_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
 
 DEFAULT_AREA = os.getenv("AREA", None)
-
 
 print(f"[SEARCH] Usando embeddings: {EMBEDDING_MODEL_NAME}")
 print(f"[SEARCH] Chroma base dir: {BASE_CHROMA_DIR}")
@@ -29,7 +27,11 @@ _embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
 def _get_collection(area: Optional[str] = None):
     """
     Devuelve la colección de Chroma para el área indicada.
-    - Si area es None → usa modo 'global' (ruta base + colección base).
+
+    Diseño actual:
+    - Si area es None → usa modo 'global':
+        path = BASE_CHROMA_DIR
+        collection_name = BASE_COLLECTION_NAME
     - Si area tiene valor → usa subcarpeta y colección por área:
         path = BASE_CHROMA_DIR / area
         collection_name = BASE_COLLECTION_NAME + "_" + area

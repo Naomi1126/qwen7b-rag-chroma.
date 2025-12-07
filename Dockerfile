@@ -47,6 +47,14 @@ RUN /opt/venv/bin/pip install --no-cache-dir open-webui==0.3.25
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
 
+# >>> NUEVO: instalar libs útiles si aún no están en requirements.txt
+# (Puedes quitarlas de aquí si ya las agregaste a requirements.txt)
+RUN /opt/venv/bin/pip install --no-cache-dir \
+    "python-jose[cryptography]" \
+    "passlib[bcrypt]" \
+    pandas \
+    openpyxl
+
 # 6b) AnythingLLM bare-metal
 RUN git clone https://github.com/Mintplex-Labs/anything-llm.git /workspace/anything-llm && \
     cd /workspace/anything-llm && \
@@ -74,6 +82,12 @@ COPY --chown=app:app ingest.py /workspace/ingest.py
 COPY --chown=app:app search.py /workspace/search.py
 COPY --chown=app:app app.py /workspace/app.py
 COPY --chown=app:app rag_core.py /workspace/rag_core.py
+
+# >>> NUEVO: si ya tienes estos archivos para auth/BD, cópialos aquí
+# (si aún no los tienes, puedes comentar estas líneas hasta crearlos)
+# COPY --chown=app:app auth.py /workspace/auth.py
+# COPY --chown=app:app models.py /workspace/models.py
+# COPY --chown=app:app database.py /workspace/database.py
 
 RUN chmod +x /workspace/start.sh /workspace/ingest.py /workspace/search.py /workspace/app.py /workspace/rag_core.py
 

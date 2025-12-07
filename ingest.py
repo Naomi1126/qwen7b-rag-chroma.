@@ -1,6 +1,6 @@
 import os, sys, hashlib, argparse
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # Extracción
 import fitz  # PyMuPDF
@@ -179,18 +179,110 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# ---------------------------------------------------------------------
+# Helpers reutilizables para CLI y para backend
+# ---------------------------------------------------------------------
+
+_embed_model: Optional[SentenceTransformer] = None
+
+
+def get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        print(f"[INGEST] Cargando modelo de embeddings: {EMBED_MODEL_NAME}")
+        _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+    return _embed_model
+
+
+def get_collection(area: Optional[str]):
+    """
+    Misma lógica que ya usabas en main:
+    - Si area es None → Chroma base + colección base
+    - Si area tiene valor → subcarpeta y colección docs_<area>
+    """
+    if area:
+        chroma_dir = os.path.join(BASE_CHROMA_DIR, area)
+        collection_name = f"{BASE_COLLECTION_NAME}_{area}"
+    else:
+        chroma_dir = BASE_CHROMA_DIR
+        collection_name = BASE_COLLECTION_NAME
+
+    print(f"[INGEST] Inicializando Chroma en {chroma_dir}")
+    client = chromadb.PersistentClient(
+        path=chroma_dir,
+        settings=Settings(allow_reset=False),
+    )
+    print(f"[INGEST] Colección: {collection_name}")
+    return client.get_or_create_collection(collection_name)
+
+
+def ingest_single_file(p: Path, area: Optional[str], model: SentenceTransformer, coll) -> int:
+    """
+    Ingresa un solo archivo a la colección indicada.
+    Devuelve el número de chunks indexados.
+    """
+    print(f"[INGEST] {p}")
+    docs = extract_any(p)
+    if not docs:
+        print(f"[SKIP] {p} (no se pudo extraer texto)")
+        return 0
+
+    base_id = file_sha1(p)[:12]
+    ids, metadatas, texts = [], [], []
+
+    for k, d in enumerate(docs):
+        ids.append(f"{base_id}-{k}")
+
+        meta = dict(d["metadata"]) if isinstance(d["metadata"], dict) else {}
+        # Añadimos el área a la metadata si existe
+        if area:
+            meta["area"] = area
+
+        metadatas.append(meta)
+        texts.append(d["text"])
+
+    if ids:
+        try:
+            coll.delete(ids=ids)
+        except Exception:
+            # Si no existen antes, no pasa nada
+            pass
+
+    embs = model.encode(texts, normalize_embeddings=True).tolist()
+    coll.add(ids=ids, documents=texts, embeddings=embs, metadatas=metadatas)
+    print(f"[OK] {p} → {len(ids)} chunks indexados")
+    return len(ids)
+
+
+# ---------------------------------------------------------------------
+# Función reutilizable desde FastAPI
+# ---------------------------------------------------------------------
+
+def ingest_file_for_area(path: Path, area: Optional[str] = None) -> int:
+    """
+    Ingresa UN archivo a Chroma, respetando el esquema de colecciones por área.
+    Pensado para ser llamado desde el backend (endpoint /upload/{area}).
+
+    - path: ruta completa al archivo (ej. /data/docs/logistica/miarchivo.xlsx)
+    - area: área lógica (logistica, ventas, etc.). Puede ser None para modo global.
+    """
+    model = get_embed_model()
+    coll = get_collection(area)
+    return ingest_single_file(path, area, model, coll)
+
+
+# ---------------------------------------------------------------------
+# CLI: ingesta por carpeta (modo actual)
+# ---------------------------------------------------------------------
+
 def main():
     args = parse_args()
     area = args.area
 
     if area:
         data_dir = BASE_DATA_DIR / area
-        chroma_dir = os.path.join(BASE_CHROMA_DIR, area)
-        collection_name = f"{BASE_COLLECTION_NAME}_{area}"
     else:
         data_dir = BASE_DATA_DIR
-        chroma_dir = BASE_CHROMA_DIR
-        collection_name = BASE_COLLECTION_NAME
 
     if not data_dir.exists():
         print(
@@ -200,16 +292,9 @@ def main():
         sys.exit(1)
 
     print(f"[INFO] Área: {area if area else '(global sin área)'}")
-    print("[INFO] Cargando modelo de embeddings:", EMBED_MODEL_NAME)
-    model = SentenceTransformer(EMBED_MODEL_NAME)
 
-    print("[INFO] Inicializando Chroma en", chroma_dir)
-    client = chromadb.PersistentClient(
-        path=chroma_dir,
-        settings=Settings(allow_reset=False),
-    )
-    coll = client.get_or_create_collection(collection_name)
-    print(f"[INFO] Colección: {collection_name}")
+    model = get_embed_model()
+    coll = get_collection(area)
 
     files: List[Path] = []
     for root, _, fs in os.walk(data_dir):
@@ -227,30 +312,7 @@ def main():
 
     added = 0
     for p in sorted(files):
-        print(f"[INGEST] {p}")
-        docs = extract_any(p)
-        if not docs:
-            print(f"[SKIP] {p} (no se pudo extraer texto)")
-            continue
-
-        base_id = file_sha1(p)[:12]
-        ids, metadatas, texts = [], [], []
-
-        for k, d in enumerate(docs):
-            ids.append(f"{base_id}-{k}")
-            metadatas.append(d["metadata"])
-            texts.append(d["text"])
-
-        if ids:
-            try:
-                coll.delete(ids=ids)
-            except Exception:
-                pass
-
-        embs = model.encode(texts, normalize_embeddings=True).tolist()
-        coll.add(ids=ids, documents=texts, embeddings=embs, metadatas=metadatas)
-        added += len(ids)
-        print(f"[OK] {p} → {len(ids)} chunks indexados")
+        added += ingest_single_file(p, area, model, coll)
 
     print(f"[DONE] Total chunks indexados: {added}")
 
