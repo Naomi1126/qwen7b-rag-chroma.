@@ -67,6 +67,18 @@ class MeResponse(BaseModel):
     areas: List[str]
 
 
+# Modelos para /auth/login (JSON)
+class AuthLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthLoginResponse(BaseModel):
+    token: str
+    user_id: str
+    areas: List[str]
+
+
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
@@ -115,6 +127,38 @@ def login(
 
     access_token = create_access_token(data={"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/auth/login", response_model=AuthLoginResponse)
+def auth_login(
+    data: AuthLoginRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Login pensado para el frontend (Gradio).
+    Recibe JSON:
+    {
+      "username": "...",
+      "password": "..."
+    }
+
+    Devuelve:
+    - token  (JWT)
+    - user_id
+    - areas  (lista de slugs de áreas a las que el usuario tiene acceso)
+    """
+    user = get_user_by_email(db, data.username)
+    if not user or not verify_password(data.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Credenciales incorrectas")
+
+    access_token = create_access_token(data={"sub": user.email})
+    areas = [area.slug for area in user.areas]
+
+    return AuthLoginResponse(
+        token=access_token,
+        user_id=str(user.id),
+        areas=areas,
+    )
 
 
 @app.get("/me", response_model=MeResponse)
