@@ -7,9 +7,31 @@ from requests import RequestException
 
 from search import search_docs
 
-VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
-VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+# ---------------------------
+# Configuración de vLLM / modelo
+# ---------------------------
+
+# Endpoint OpenAI-compatible de vLLM
+VLLM_API_URL = os.getenv(
+    "VLLM_API_URL",
+    "http://127.0.0.1:8000/v1/chat/completions",
+)
+
+# Modelo por defecto: volvemos a Qwen2-7B-Instruct
+VLLM_MODEL_NAME = os.getenv(
+    "VLLM_MODEL_NAME",
+    "Qwen/Qwen2-7B-Instruct",
+)
+
+# Área por defecto (opcional, se puede usar a nivel entorno)
 DEFAULT_AREA = os.getenv("AREA", None)
+
+# Límite de caracteres de contexto para ahorrar memoria en GPU
+# (puedes ajustar por variable de entorno RAG_MAX_CONTEXT_CHARS)
+MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "12000"))
+
+# Límite de tokens de salida del modelo
+MAX_COMPLETION_TOKENS = int(os.getenv("RAG_MAX_COMPLETION_TOKENS", "512"))
 
 
 def build_context(
@@ -50,7 +72,34 @@ def build_context(
 
         sources.append(source_info)
 
-    context = "\n\n---\n\n".join(chunks)
+    # ---------------------------
+    # Construcción de contexto con límite de longitud
+    # para evitar prompts gigantes que saturen la GPU
+    # ---------------------------
+    sep = "\n\n---\n\n"
+    context_parts: List[str] = []
+    current_len = 0
+
+    for chunk in chunks:
+        # Longitud que añadiría este chunk (incluyendo separador si no es el primero)
+        extra_len = len(chunk) + (len(sep) if context_parts else 0)
+
+        if current_len + extra_len > MAX_CONTEXT_CHARS:
+            # Todavía cabe una parte del chunk
+            remaining = MAX_CONTEXT_CHARS - current_len
+            if remaining > 0:
+                context_parts.append(chunk[:remaining])
+                current_len += remaining
+            print(
+                f"[RAG] Contexto truncado a {MAX_CONTEXT_CHARS} caracteres "
+                f"para ahorrar memoria."
+            )
+            break
+
+        context_parts.append(chunk)
+        current_len += extra_len
+
+    context = sep.join(context_parts)
 
     return {
         "context": context,
@@ -99,11 +148,13 @@ def call_model_with_context(
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,
-        "max_tokens": 512,
+        "max_tokens": MAX_COMPLETION_TOKENS,
     }
 
     print(f"[RAG] Llamando a vLLM en: {VLLM_API_URL}")
     print(f"[RAG] Modelo: {VLLM_MODEL_NAME}")
+    print(f"[RAG] max_tokens: {MAX_COMPLETION_TOKENS}")
+    print(f"[RAG] Longitud de contexto: {len(context)} caracteres")
 
     try:
         resp = requests.post(VLLM_API_URL, json=payload, timeout=120)

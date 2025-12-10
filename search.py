@@ -6,6 +6,8 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+# Dispositivo de embeddings: por defecto CPU para no competir con vLLM en la GPU
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 
 BASE_CHROMA_DIR = os.getenv("CHROMA_DIR", "/data/chroma")
 BASE_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
@@ -13,6 +15,7 @@ BASE_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
 DEFAULT_AREA = os.getenv("AREA", None)
 
 print(f"[SEARCH] Usando embeddings: {EMBEDDING_MODEL_NAME}")
+print(f"[SEARCH] Dispositivo embeddings: {EMBEDDING_DEVICE}")
 print(f"[SEARCH] Chroma base dir: {BASE_CHROMA_DIR}")
 print(f"[SEARCH] Colección base: {BASE_COLLECTION_NAME}")
 if DEFAULT_AREA:
@@ -20,8 +23,22 @@ if DEFAULT_AREA:
 else:
     print("[SEARCH] Sin área por defecto (modo global).")
 
+# Carga perezosa del modelo de embeddings para ahorrar memoria en arranque
+_embedder: Optional[SentenceTransformer] = None
 
-_embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+def _get_embedder() -> SentenceTransformer:
+    global _embedder
+    if _embedder is None:
+        print(
+            f"[SEARCH] Cargando modelo de embeddings '{EMBEDDING_MODEL_NAME}' "
+            f"en dispositivo: {EMBEDDING_DEVICE}"
+        )
+        _embedder = SentenceTransformer(
+            EMBEDDING_MODEL_NAME,
+            device=EMBEDDING_DEVICE,
+        )
+    return _embedder
 
 
 def _get_collection(area: Optional[str] = None):
@@ -70,7 +87,8 @@ def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[
     collection = _get_collection(area)
 
     print(f"[SEARCH] Consulta en área: {area if area else '(global)'}")
-    emb = _embedder.encode([query]).tolist()
+    embedder = _get_embedder()
+    emb = embedder.encode([query]).tolist()
 
     res = collection.query(
         query_embeddings=emb,
