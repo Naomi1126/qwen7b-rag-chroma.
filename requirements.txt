@@ -1,17 +1,20 @@
+# Backend
 fastapi==0.111.0
 uvicorn[standard]==0.30.3
 requests==2.32.3
 
 # Frontend
-gradio==4.44.0
+gradio==4.44.1
 
 # Auth / seguridad
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
 
-# RAG propio
+# RAG
 chromadb==0.5.5
 sentence-transformers==3.0.1
+transformers==4.44.2
+safetensors==0.4.5
+
 pymupdf==1.24.10
 python-docx==1.1.2
 openpyxl==3.1.5

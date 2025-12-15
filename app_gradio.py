@@ -9,36 +9,12 @@ import requests
 # -------------------------------------------------------------------
 # CONFIG
 # -------------------------------------------------------------------
-
-# Backend: FastAPI RAG
-# Se puede sobreescribir con la variable de entorno BACKEND_URL
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:9001")
-
-# Ejemplos:
-# BACKEND_URL = "https://tu-backend.trycloudflare.com"
-# BACKEND_URL = "https://api.miempresa.com"
-
 
 # -------------------------------------------------------------------
 # Helper para dropdown de conversaciones
 # -------------------------------------------------------------------
-
 def build_conv_dropdown(conv_state: Dict[str, Any], session: Dict[str, Any]):
-    """
-    Convierte el estado interno de conversaciones en choices para el Dropdown.
-
-    conv_state = {
-        "by_id": {
-            conv_id: {
-                "area": str,
-                "title": str,
-                "messages": [{"role": "user"/"assistant", "content": str}, ...]
-            },
-            ...
-        },
-        "order": [conv_id1, conv_id2, ...]  # más reciente primero
-    }
-    """
     if conv_state is None:
         conv_state = {"by_id": {}, "order": []}
 
@@ -63,21 +39,13 @@ def build_conv_dropdown(conv_state: Dict[str, Any], session: Dict[str, Any]):
 
     return gr.update(choices=choices, value=active_id)
 
-
 # -------------------------------------------------------------------
 # LOGIN
 # -------------------------------------------------------------------
-
-def do_login(
-    username: str,
-    password: str,
-    session: Dict[str, Any],
-    conv_state: Dict[str, Any],
-):
+def do_login(username: str, password: str, session: Dict[str, Any], conv_state: Dict[str, Any]):
     if not username or not password:
         raise gr.Error("Por favor ingresa usuario y contraseña.")
 
-    # Llamar al backend /auth/login (JSON)
     try:
         resp = requests.post(
             f"{BACKEND_URL}/auth/login",
@@ -96,8 +64,6 @@ def do_login(
         raise gr.Error(f"Login fallido: {detail}")
 
     data = resp.json()
-
-    # Estos nombres vienen de tu app.py (AuthLoginResponse)
     token = data.get("token")
     user_id = data.get("user_id")
     areas = data.get("areas", [])
@@ -119,7 +85,6 @@ def do_login(
     if conv_state is None:
         conv_state = {"by_id": {}, "order": []}
 
-    # Crear una primera conversación vacía
     conv_id = str(uuid.uuid4())
     conv_state["by_id"][conv_id] = {
         "area": new_session["active_area"],
@@ -129,18 +94,9 @@ def do_login(
     conv_state["order"].insert(0, conv_id)
     new_session["active_conversation_id"] = conv_id
 
-    # Chat vacío
     chat_history: List[Tuple[str, str]] = []
-
-    # Dropdown de áreas (solo las permitidas por el backend)
     area_dd = gr.update(choices=areas, value=new_session["active_area"])
-
-    # Dropdown de conversaciones
     conv_dropdown = build_conv_dropdown(conv_state, new_session)
-
-    # Ocultar login, mostrar chat
-    login_block_update = gr.update(visible=False)
-    chat_block_update = gr.update(visible=True)
 
     return (
         new_session,
@@ -148,15 +104,13 @@ def do_login(
         chat_history,
         area_dd,
         conv_dropdown,
-        login_block_update,
-        chat_block_update,
+        gr.update(visible=False),
+        gr.update(visible=True),
     )
-
 
 # -------------------------------------------------------------------
 # ENVÍO DE MENSAJES
 # -------------------------------------------------------------------
-
 def send_message(
     message: str,
     session: Dict[str, Any],
@@ -168,12 +122,10 @@ def send_message(
         raise gr.Error("No hay sesión activa. Inicia sesión nuevamente.")
 
     if not message or not message.strip():
-        # No mandamos nada si el mensaje está vacío
         return "", history, session, conv_state, build_conv_dropdown(conv_state, session)
 
     areas = session.get("areas") or []
     if area not in areas:
-        # No se manda petición si no tiene permiso
         bot_text = (
             "No tienes acceso a esta área. "
             "Por favor contacta al administrador si crees que esto es un error."
@@ -198,7 +150,6 @@ def send_message(
     conv_meta = conv_state["by_id"][active_conv_id]
     conv_meta["area"] = area
 
-    # Guardar mensaje de usuario en frontend
     conv_meta["messages"].append({"role": "user", "content": message})
     if conv_meta["title"] == "Nueva conversación":
         first = message.strip()
@@ -208,8 +159,6 @@ def send_message(
 
     history = history + [(message, None)]
 
-    # Payload para tu backend: /chat/{area}
-    # Tu ChatRequest solo necesita "query" (top_k opcional)
     payload = {
         "query": message,
         "top_k": 5,
@@ -217,7 +166,6 @@ def send_message(
         "return_sources": False,
     }
 
-    # JWT en header Authorization: Bearer <token>
     headers = {"Authorization": f"Bearer {session['token']}"}
 
     try:
@@ -243,7 +191,6 @@ def send_message(
         return "", history, session, conv_state, build_conv_dropdown(conv_state, session)
 
     data = resp.json()
-    # Tu ChatResponse tiene campo "answer"
     answer = data.get("answer", "")
 
     conv_state["by_id"][active_conv_id]["messages"].append(
@@ -251,22 +198,14 @@ def send_message(
     )
 
     history[-1] = (message, answer)
-
     conv_dropdown = build_conv_dropdown(conv_state, session)
 
     return "", history, session, conv_state, conv_dropdown
 
-
 # -------------------------------------------------------------------
 # NUEVA CONVERSACIÓN
 # -------------------------------------------------------------------
-
-def new_conversation(
-    session: Dict[str, Any],
-    conv_state: Dict[str, Any],
-    history: List[Tuple[str, str]],
-    area: str,
-):
+def new_conversation(session: Dict[str, Any], conv_state: Dict[str, Any], history: List[Tuple[str, str]], area: str):
     if session is None or not session.get("token"):
         raise gr.Error("No hay sesión activa. Inicia sesión nuevamente.")
 
@@ -286,20 +225,12 @@ def new_conversation(
     session["active_conversation_id"] = conv_id
 
     conv_dropdown = build_conv_dropdown(conv_state, session)
-
-    # Limpia el chat actual
     return [], session, conv_state, conv_dropdown
-
 
 # -------------------------------------------------------------------
 # CARGAR CONVERSACIÓN DESDE EL SIDEBAR
 # -------------------------------------------------------------------
-
-def load_conversation(
-    conv_id: str,
-    session: Dict[str, Any],
-    conv_state: Dict[str, Any],
-):
+def load_conversation(conv_id: str, session: Dict[str, Any], conv_state: Dict[str, Any]):
     if not conv_id or conv_state is None:
         return [], session
 
@@ -309,7 +240,6 @@ def load_conversation(
     session["active_conversation_id"] = conv_id
     conv = conv_state["by_id"][conv_id]
 
-    # Convertir la lista de mensajes en tuplas (usuario, bot) para el Chatbot
     history: List[Tuple[str, str]] = []
     current_user = None
 
@@ -320,9 +250,8 @@ def load_conversation(
             if current_user is not None:
                 history.append((current_user, None))
             current_user = content
-        else:  # assistant
+        else:
             if current_user is None:
-                # Por si hubiera una respuesta sin user antes (no debería)
                 history.append(("", content))
             else:
                 history.append((current_user, content))
@@ -333,182 +262,226 @@ def load_conversation(
 
     return history, session
 
-
 # -------------------------------------------------------------------
-# CSS para estilo azul marino y burbujas
+# CSS (mismo look que tu mockup)
 # -------------------------------------------------------------------
-
 CUSTOM_CSS = """
-:root {
-    --color-primary: #001f3f;
-    --color-bg: #f3f4f6;
+:root{
+  --navy:#242049;
+  --panel:#D5D0D0;
+  --bubble:#FFFFFF;
+  --radius:28px;
 }
 
-.gradio-container {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: var(--color-bg);
+.gradio-container{
+  background: var(--navy) !important;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-/* Header */
-#header {
-    background: white;
-    border-radius: 12px;
-    padding: 0.75rem 1rem;
-    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
-    margin-bottom: 1rem;
+/* Quita “marcos” default */
+.block, .gradio-container .prose { color: #111; }
+
+/* ------------ LOGIN SCREEN ------------ */
+#login-page{
+  min-height: calc(100vh - 40px);
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
 
-/* Chatbot burbujas */
-#chatbot .message.user {
-    justify-content: flex-end;
+#login-card{
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 28px;
+  width: min(520px, 92vw);
+  box-shadow: 0 18px 40px rgba(0,0,0,.18);
 }
 
-#chatbot .message.user .bubble {
-    background: var(--color-primary);
-    color: white;
+#login-logo-wrap{
+  display:flex;
+  justify-content:center;
+  margin-bottom: 18px;
+}
+#login-user-icon{
+  display:flex;
+  justify-content:center;
+  margin: 10px 0 14px;
 }
 
-#chatbot .message.bot {
-    justify-content: flex-start;
+/* Inputs redondeados como tu diseño */
+#login-card input{
+  border-radius: 999px !important;
+}
+#login-card button{
+  border-radius: 999px !important;
 }
 
-#chatbot .message.bot .bubble {
-    background: white;
-    color: #111827;
+/* ------------ CHAT LAYOUT ------------ */
+#app-shell{
+  max-width: 1180px;
+  margin: 22px auto;
+  padding: 0 14px;
 }
 
-/* Sidebar de conversaciones */
-#sidebar {
-    background: white;
-    border-radius: 12px;
-    padding: 0.75rem 1rem;
-    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+#chat-row{
+  gap: 18px;
 }
 
-/* Panel de chat */
-#chat-panel {
-    background: white;
-    border-radius: 12px;
-    padding: 0.75rem 1rem;
-    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+/* Sidebar gris */
+#sidebar{
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 18px;
+  min-height: 680px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.18);
+}
+
+/* “píldora” superior (área) */
+#area-pill button, #area-pill, #area-dd{
+  border-radius: 999px !important;
+}
+
+/* Panel principal gris */
+#chat-panel{
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 18px;
+  min-height: 680px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.18);
+}
+
+/* Caja del chatbot: transparente para que se vea el gris del panel */
+#chatbot{
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Burbuja blanca para ambos (como tu mockup) */
+#chatbot .message .bubble{
+  background: var(--bubble) !important;
+  color:#111827 !important;
+  border-radius: 22px !important;
+  padding: 18px 18px !important;
+  box-shadow: 0 10px 24px rgba(0,0,0,.08);
+}
+
+/* Mensajes alineados */
+#chatbot .message.user{ justify-content: flex-end; }
+#chatbot .message.bot{ justify-content: flex-start; }
+
+/* Oculta avatar default del Chatbot (usaremos los nuestros) */
+#chatbot .avatar-container{ display:none !important; }
+
+/* Input inferior estilo pill */
+#msg-box textarea, #msg-box input{
+  border-radius: 999px !important;
+}
+#send-btn button{
+  border-radius: 999px !important;
+}
+
+/* Dropdowns estilo “limpio” */
+#sidebar select, #chat-panel select{
+  border-radius: 999px !important;
 }
 """
-
 
 # -------------------------------------------------------------------
 # Construcción de la interfaz Gradio
 # -------------------------------------------------------------------
-
 def build_app():
     with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Soft()) as demo:
         session_state = gr.State({})
         conv_state = gr.State({"by_id": {}, "order": []})
 
-        # HEADER CON LOGOS
-        with gr.Row(elem_id="header"):
-            with gr.Column(scale=1, min_width=120):
-                gr.Image(
-                    "static/logo_empresa.png",
-                    show_label=False,
-                    height=70,
-                    width=120,
-                )
-            with gr.Column(scale=3):
-                gr.Markdown(
-                    "## Chatbot Corporativo\n"
-                    "Interfaz tipo ChatGPT/Gemini con autenticación y áreas por usuario."
-                )
-            with gr.Column(scale=1, min_width=80):
-                gr.Image(
-                    "static/logo_robot.png",
-                    show_label=False,
-                    height=70,
-                    width=70,
-                )
+        # ---------------- LOGIN (centrado) ----------------
+        with gr.Group(visible=True, elem_id="login-page") as login_block:
+            with gr.Column(elem_id="login-card"):
+                with gr.Row(elem_id="login-logo-wrap"):
+                    gr.Image("static/logo_empresa.png", show_label=False, height=70)
 
-        # BLOQUE DE LOGIN
-        with gr.Group(visible=True) as login_block:
-            gr.Markdown("### Iniciar sesión")
-            with gr.Row():
-                username = gr.Textbox(
-                    label="Usuario o correo",
-                    placeholder="tu_usuario",
-                )
-                password = gr.Textbox(
-                    label="Contraseña",
-                    type="password",
-                    placeholder="••••••••",
-                )
-            login_btn = gr.Button("Iniciar sesión", variant="primary")
+                with gr.Row(elem_id="login-user-icon"):
+                    gr.Image("static/user.png", show_label=False, height=70, width=70)
 
-        # BLOQUE DE CHAT (oculto hasta que haya sesión)
-        with gr.Group(visible=False) as chat_block:
-            with gr.Row():
-                # SIDEBAR DE HISTORIALES
-                with gr.Column(scale=1, min_width=260, elem_id="sidebar"):
-                    gr.Markdown("### Conversaciones")
-                    new_conv_btn = gr.Button("➕ Nueva conversación")
-                    conv_dropdown = gr.Dropdown(
-                        label="Historial",
-                        choices=[],
-                        interactive=True,
-                    )
+                username = gr.Textbox(label="Usuario", placeholder="Usuario", elem_id="login-user")
+                password = gr.Textbox(label="Contraseña", type="password", placeholder="Contraseña", elem_id="login-pass")
+                login_btn = gr.Button("Entrar", variant="primary")
 
-                # PANEL PRINCIPAL DE CHAT
-                with gr.Column(scale=3, elem_id="chat-panel"):
+        # ---------------- CHAT ----------------
+        with gr.Group(visible=False, elem_id="app-shell") as chat_block:
+            with gr.Row(elem_id="chat-row"):
+                # SIDEBAR
+                with gr.Column(scale=1, min_width=290, elem_id="sidebar"):
+                    gr.Image("static/logo_empresa.png", show_label=False, height=55)
+
+                    # Área como “píldora” (tu mockup dice Logistica)
                     area_dropdown = gr.Dropdown(
-                        label="Área",
+                        label="",
+                        choices=[],
+                        interactive=True,
+                        elem_id="area-dd",
+                    )
+
+                    gr.Markdown("**Historial**")
+                    new_conv_btn = gr.Button("➕ Nueva conversación", elem_id="new-conv")
+
+                    conv_dropdown = gr.Dropdown(
+                        label="",
                         choices=[],
                         interactive=True,
                     )
+
+                # PANEL PRINCIPAL
+                with gr.Column(scale=3, elem_id="chat-panel"):
+                    # Header mini robot (opcional como en tu mockup)
+                    with gr.Row():
+                        gr.Image("static/logo_robot.png", show_label=False, height=55, width=55)
+
                     chatbot = gr.Chatbot(
-                        label="Chat",
-                        height=500,
+                        label="",
+                        height=520,
                         elem_id="chatbot",
                         bubble_full_width=False,
                         show_copy_button=True,
                     )
+
                     with gr.Row():
                         msg_box = gr.Textbox(
-                            label="Escribe tu mensaje",
-                            placeholder="Pregunta algo al chatbot...",
-                            lines=3,
-                            scale=4,
+                            label="",
+                            placeholder="Escribe tu mensaje…",
+                            lines=1,
+                            scale=6,
+                            elem_id="msg-box",
                         )
-                        send_btn = gr.Button("Enviar", variant="primary", scale=1)
+                        send_btn = gr.Button("Enviar", variant="primary", scale=1, elem_id="send-btn")
 
-        # LÓGICA DE EVENTOS
-
-        # Login
+        # ---------------- EVENTOS ----------------
         login_btn.click(
             fn=do_login,
             inputs=[username, password, session_state, conv_state],
             outputs=[
-                session_state,   # actualiza sesión
-                conv_state,      # actualiza conv_state
-                chatbot,         # limpia chat
-                area_dropdown,   # llena áreas
-                conv_dropdown,   # llena historiales
-                login_block,     # oculta login
-                chat_block,      # muestra chat
+                session_state,
+                conv_state,
+                chatbot,
+                area_dropdown,
+                conv_dropdown,
+                login_block,
+                chat_block,
             ],
         )
 
-        # Enviar mensaje
         send_btn.click(
             fn=send_message,
             inputs=[msg_box, session_state, conv_state, area_dropdown, chatbot],
             outputs=[msg_box, chatbot, session_state, conv_state, conv_dropdown],
         )
 
-        # Nueva conversación
         new_conv_btn.click(
             fn=new_conversation,
             inputs=[session_state, conv_state, chatbot, area_dropdown],
             outputs=[chatbot, session_state, conv_state, conv_dropdown],
         )
 
-        # Seleccionar conversación del historial
         conv_dropdown.change(
             fn=load_conversation,
             inputs=[conv_dropdown, session_state, conv_state],
@@ -517,10 +490,8 @@ def build_app():
 
         return demo
 
-
 demo = build_app()
 
 if __name__ == "__main__":
-    # IMPORTANTE: escucha en 0.0.0.0 y puerto 7860
     demo.queue()
     demo.launch(server_name="0.0.0.0", server_port=7860)

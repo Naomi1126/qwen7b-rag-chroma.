@@ -6,7 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     VLLM_MODEL_NAME="Qwen/Qwen2.5-7B-Instruct" \
     VLLM_API_URL="http://127.0.0.1:8000/v1/chat/completions" \
     WEBUI_PORT=8090 \
-    PATH="/opt/venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}" \
+    GRADIO_ANALYTICS_ENABLED="False"
 
 WORKDIR /workspace
 
@@ -28,14 +29,14 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa && \
 RUN python3.11 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-# 4) Torch + vLLM (instalados una sola vez, bien)
+# 4) Torch + vLLM (SIN outlines; vamos a desactivar guided decoding en start.sh)
 RUN /opt/venv/bin/pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu121 \
     "torch==2.4.0" "torchvision==0.19.0" && \
     /opt/venv/bin/pip install --no-cache-dir \
-    "vllm==0.6.0" "outlines==0.0.46"
+    "vllm==0.6.0"
 
-# 5) Dependencias de TU proyecto
+# 5) Dependencias del proyecto
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
 
@@ -60,12 +61,9 @@ COPY --chown=app:app database.py /workspace/database.py
 COPY --chown=app:app app_gradio.py /workspace/app_gradio.py
 COPY --chown=app:app static /workspace/static
 
-RUN chmod +x /workspace/start.sh /workspace/ingest.py /workspace/search.py /workspace/app.py /workspace/rag_core.py
+RUN chmod +x /workspace/start.sh
 
 USER app
 
-# 8000 = API FastAPI / vLLM
-# 7860 = frontend Gradio (si lo usas dentro del contenedor)
-EXPOSE 8000 7860 9001 
-
+EXPOSE 8000 7860 9001
 ENTRYPOINT ["/workspace/start.sh"]

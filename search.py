@@ -1,13 +1,14 @@
 import os
 import sys
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import chromadb
 from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
-# Dispositivo de embeddings: por defecto CPU para no competir con vLLM en la GPU
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+
+HF_HOME = os.getenv("HF_HOME", "/workspace/hf")
 
 BASE_CHROMA_DIR = os.getenv("CHROMA_DIR", "/data/chroma")
 BASE_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
@@ -16,6 +17,7 @@ DEFAULT_AREA = os.getenv("AREA", None)
 
 print(f"[SEARCH] Usando embeddings: {EMBEDDING_MODEL_NAME}")
 print(f"[SEARCH] Dispositivo embeddings: {EMBEDDING_DEVICE}")
+print(f"[SEARCH] HF_HOME (cache): {HF_HOME}")
 print(f"[SEARCH] Chroma base dir: {BASE_CHROMA_DIR}")
 print(f"[SEARCH] Colección base: {BASE_COLLECTION_NAME}")
 if DEFAULT_AREA:
@@ -23,8 +25,8 @@ if DEFAULT_AREA:
 else:
     print("[SEARCH] Sin área por defecto (modo global).")
 
-# Carga perezosa del modelo de embeddings para ahorrar memoria en arranque
 _embedder: Optional[SentenceTransformer] = None
+_collection_cache: Dict[Tuple[str, str], Any] = {}  # (chroma_dir, collection_name) -> collection
 
 
 def _get_embedder() -> SentenceTransformer:
@@ -37,19 +39,17 @@ def _get_embedder() -> SentenceTransformer:
         _embedder = SentenceTransformer(
             EMBEDDING_MODEL_NAME,
             device=EMBEDDING_DEVICE,
+            cache_folder=HF_HOME,
         )
     return _embedder
 
 
 def _get_collection(area: Optional[str] = None):
     """
-    Devuelve la colección de Chroma para el área indicada.
-
-    Diseño actual:
-    - Si area es None → usa modo 'global':
+    - Si area es None → modo global:
         path = BASE_CHROMA_DIR
         collection_name = BASE_COLLECTION_NAME
-    - Si area tiene valor → usa subcarpeta y colección por área:
+    - Si area tiene valor → subcarpeta y colección por área:
         path = BASE_CHROMA_DIR / area
         collection_name = BASE_COLLECTION_NAME + "_" + area
     """
@@ -60,27 +60,17 @@ def _get_collection(area: Optional[str] = None):
         chroma_dir = BASE_CHROMA_DIR
         collection_name = BASE_COLLECTION_NAME
 
+    key = (chroma_dir, collection_name)
+    if key in _collection_cache:
+        return _collection_cache[key]
+
     client = chromadb.PersistentClient(path=chroma_dir)
-    return client.get_or_create_collection(name=collection_name)
+    coll = client.get_or_create_collection(name=collection_name)
+    _collection_cache[key] = coll
+    return coll
 
 
 def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Hace búsqueda semántica en Chroma y regresa una lista de resultados:
-    [
-      {
-        "text": <chunk>,
-        "metadata": <dict>,
-        "distance": <float>
-      },
-      ...
-    ]
-
-    :param query: texto de la pregunta
-    :param top_k: número de resultados a devolver
-    :param area: nombre del área (logistica, ventas, sistemas, etc.).
-                 Si es None, se usa DEFAULT_AREA y si tampoco hay, se va al modo global.
-    """
     if area is None:
         area = DEFAULT_AREA
 
@@ -88,7 +78,11 @@ def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[
 
     print(f"[SEARCH] Consulta en área: {area if area else '(global)'}")
     embedder = _get_embedder()
-    emb = embedder.encode([query]).tolist()
+
+    emb = embedder.encode(
+        [query],
+        normalize_embeddings=True,
+    ).tolist()
 
     res = collection.query(
         query_embeddings=emb,
@@ -115,10 +109,10 @@ def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[
 def pretty_print_results(results: List[Dict[str, Any]]) -> None:
     for i, r in enumerate(results, start=1):
         print(f"\n=== Resultado #{i} (distancia: {r['distance']:.4f}) ===")
-        fuente = r["metadata"].get("source")
+        fuente = r["metadata"].get("source") or r["metadata"].get("path")
         if fuente:
             print(f"Fuente: {fuente}")
-        print(r["text"][:1000])  # solo los primeros caracteres
+        print(r["text"][:1000])
 
 
 if __name__ == "__main__":
