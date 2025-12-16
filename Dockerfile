@@ -29,7 +29,7 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa && \
 RUN python3.11 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-# 4) Torch + vLLM (SIN outlines; vamos a desactivar guided decoding en start.sh)
+# 4) Torch + vLLM
 RUN /opt/venv/bin/pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu121 \
     "torch==2.4.0" "torchvision==0.19.0" && \
@@ -39,6 +39,14 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
 # 5) Dependencias del proyecto
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
+
+# 5.1) Reinstalar conjunto estable (evita "No API found" y drift)
+RUN /opt/venv/bin/pip install --no-cache-dir --upgrade --force-reinstall \
+    "numpy==1.26.4" \
+    "huggingface_hub==0.23.5" \
+    "gradio==4.36.1" \
+    "gradio-client==1.0.1" \
+ && rm -rf /opt/venv/lib/python3.11/site-packages/gradio_client/__pycache__
 
 # 6) Limpieza
 RUN apt-get purge -y build-essential python3.11-dev && \
@@ -59,6 +67,7 @@ COPY --chown=app:app auth.py /workspace/auth.py
 COPY --chown=app:app models.py /workspace/models.py
 COPY --chown=app:app database.py /workspace/database.py
 COPY --chown=app:app app_gradio.py /workspace/app_gradio.py
+COPY --chown=app:app init_admin.py /workspace/init_admin.py
 COPY --chown=app:app static /workspace/static
 
 RUN chmod +x /workspace/start.sh

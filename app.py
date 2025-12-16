@@ -14,10 +14,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from pathlib import Path as FsPath
 
-# --- Importa tu lógica de RAG ---
+# lógica de RAG 
 from rag_core import answer_with_rag
 
-# --- Autenticación y DB (imports sin punto, porque están en el mismo nivel) ---
+#  Autenticación y DB 
 from auth import (
     get_db,
     get_current_user,
@@ -28,28 +28,24 @@ from auth import (
 from models import User  # Modelo User con relación a áreas
 from database import init_db
 
-# --- Ingesta de documentos (PDF, Excel, etc.) ---
+#  Ingesta de documentos (PDF, Excel, etc.) 
 from ingest import ingest_file_for_area
 
 # Inicializa la base de datos (crea tablas si no existen)
 init_db()
 
 
-# ------------------------------------------------------------------------------
 # APP
-# ------------------------------------------------------------------------------
 
 app = FastAPI(title="Comarket/AS2 Qwen RAG API por Áreas")
 
 
-# ------------------------------------------------------------------------------
 # Pydantic Models
-# ------------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
     query: str
     top_k: Optional[int] = 5
-    area: Optional[str] = None        # Para /chat general (área opcional)
+    area: Optional[str] = None        # Para /chat general
     return_context: Optional[bool] = False
     return_sources: Optional[bool] = False
 
@@ -79,9 +75,7 @@ class AuthLoginResponse(BaseModel):
     areas: List[str]
 
 
-# ------------------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------------------
 
 def user_has_access_to_area(user: User, area_slug: str) -> bool:
     """
@@ -108,9 +102,7 @@ def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
     return dest_path
 
 
-# ------------------------------------------------------------------------------
 # AUTH
-# ------------------------------------------------------------------------------
 
 @app.post("/login")
 def login(
@@ -173,9 +165,7 @@ def get_me(current_user: User = Depends(get_current_user)):
     )
 
 
-# ------------------------------------------------------------------------------
 # ENDPOINT GENERAL /chat (área opcional)
-# ------------------------------------------------------------------------------
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(
@@ -221,9 +211,7 @@ def chat(
     return resp
 
 
-# ------------------------------------------------------------------------------
 # ENDPOINT POR ÁREA /chat/{area}
-# ------------------------------------------------------------------------------
 
 @app.post("/chat/{area}", response_model=ChatResponse)
 def chat_by_area(
@@ -268,9 +256,7 @@ def chat_by_area(
     return resp
 
 
-# ------------------------------------------------------------------------------
 # ENDPOINT DE SUBIDA DE DOCUMENTOS POR ÁREA
-# ------------------------------------------------------------------------------
 
 @app.post("/upload/{area}")
 def upload_file_for_area(
@@ -295,7 +281,7 @@ def upload_file_for_area(
 
     dest_path = save_uploaded_file(area, file)
 
-    # Llama a la ingesta real (de ingest.py)
+    # Llama a ingest.py
     try:
         ingest_file_for_area(dest_path, area=area)
     except Exception as e:
@@ -307,9 +293,7 @@ def upload_file_for_area(
     return {"status": "ok", "filename": file.filename, "area": area}
 
 
-# ------------------------------------------------------------------------------
 # Healthcheck
-# ------------------------------------------------------------------------------
 
 @app.get("/health")
 def health():

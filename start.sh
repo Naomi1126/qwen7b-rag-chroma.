@@ -1,9 +1,6 @@
-#!/usr/bin/env bash
 set -euo pipefail
 
-# ==========================
 # Variables de entorno base
-# ==========================
 : "${MODEL:=Qwen/Qwen2.5-7B-Instruct}"
 : "${HF_HOME:=/workspace/hf}"
 : "${MAX_MODEL_LEN:=4096}"
@@ -17,7 +14,7 @@ set -euo pipefail
 # FastAPI RAG
 : "${RAG_API_PORT:=9001}"
 
-# Para rag_core.py (llamadas a vLLM)
+# rag_core.py
 : "${VLLM_API_URL:=http://127.0.0.1:8000/v1/chat/completions}"
 : "${VLLM_MODEL_NAME:=${MODEL}}"
 
@@ -45,9 +42,7 @@ pkill -f "vllm serve" 2>/dev/null || true
 pkill -f "uvicorn app:app" 2>/dev/null || true
 pkill -f "app_gradio.py" 2>/dev/null || true
 
-# ==========================
 # 1) Lanzar vLLM
-# ==========================
 echo "[start] Lanzando vLLM con modelo: ${MODEL}"
 /opt/venv/bin/vllm serve "${MODEL}" \
   --host 0.0.0.0 --port 8000 \
@@ -74,9 +69,7 @@ for i in {1..180}; do
   sleep 1
 done
 
-# ==========================
 # 2) Lanzar API RAG (FastAPI)
-# ==========================
 echo "[start] Lanzando API RAG (FastAPI) en :${RAG_API_PORT}"
 /opt/venv/bin/uvicorn app:app \
   --host 0.0.0.0 \
@@ -86,9 +79,11 @@ echo "[start] Lanzando API RAG (FastAPI) en :${RAG_API_PORT}"
 API_PID=$!
 echo "[start] FastAPI PID=${API_PID} en :${RAG_API_PORT}"
 
-# ==========================
+# 2.1) Asegurar admin (PBKDF2)
+echo "[start] Inicializando/asegurando usuario admin..."
+/opt/venv/bin/python /workspace/init_admin.py > /workspace/log_init_admin.log 2>&1 || true
+
 # 3) Lanzar frontend Gradio
-# ==========================
 echo "[start] Lanzando frontend Gradio en :7860"
 export GRADIO_SERVER_NAME="0.0.0.0"
 export GRADIO_SERVER_PORT="7860"

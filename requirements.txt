@@ -1,15 +1,18 @@
-# Backend
+# Core API + Auth + DB
 fastapi==0.111.0
-uvicorn[standard]==0.30.3
+uvicorn[standard]==0.30.1
+sqlalchemy==2.0.31
+python-jose==3.3.0
 requests==2.32.3
+python-multipart==0.0.9
 
-# Frontend
-gradio==4.44.1
-
-# Auth / seguridad
-python-jose[cryptography]==3.3.0
+# Gradio 
+huggingface_hub==0.23.5
+gradio==4.36.1
+gradio-client==1.0.1
 
 # RAG
+numpy==1.26.4
 chromadb==0.5.5
 sentence-transformers==3.0.1
 transformers==4.44.2
@@ -22,3 +25,7 @@ pandas==2.2.2
 
 # Utilidades
 tqdm==4.66.4
+
+# bcrypt legacy support 
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.3
