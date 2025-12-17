@@ -18,7 +18,7 @@ set -euo pipefail
 : "${VLLM_API_URL:=http://127.0.0.1:8000/v1/chat/completions}"
 : "${VLLM_MODEL_NAME:=${MODEL}}"
 
-# Admin defaults 
+# Admin defaults
 : "${ADMIN_EMAIL:=admin@comarket.com}"
 : "${ADMIN_PASSWORD:=1234}"
 : "${ADMIN_NAME:=Administrador}"
@@ -67,16 +67,23 @@ VLLM_PID=$!
 echo "[start] vLLM PID=${VLLM_PID} en :8000"
 
 echo "[start] Esperando a que vLLM responda en :8000 ..."
+VLLM_READY="0"
 for i in {1..180}; do
   if curl -sSf http://127.0.0.1:8000/v1/models \
        -H "Authorization: Bearer ${OPENAI_API_KEY}" >/dev/null 2>&1; then
     echo "[start] vLLM listo."
+    VLLM_READY="1"
     break
   fi
   sleep 1
 done
 
-# 2) Inicializar DB: áreas y admin 
+if [ "${VLLM_READY}" != "1" ]; then
+  echo "[start] ERROR: vLLM no levantó en 180s. Revisa /workspace/log_vllm.log"
+  exit 1
+fi
+
+# 2) Inicializar DB: áreas y admin
 echo "[start] Inicializando áreas..."
 /opt/venv/bin/python /workspace/init_areas.py > /workspace/log_init_areas.log 2>&1 || true
 

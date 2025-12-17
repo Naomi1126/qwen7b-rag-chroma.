@@ -6,8 +6,8 @@ python-jose==3.3.0
 requests==2.32.3
 python-multipart==0.0.9
 
-# Gradio 
-huggingface_hub==0.23.5
+# Gradio
+huggingface-hub==0.24.7
 gradio==4.36.1
 gradio-client==1.0.1
 
@@ -26,6 +26,6 @@ pandas==2.2.2
 # Utilidades
 tqdm==4.66.4
 
-# bcrypt legacy support 
+# bcrypt legacy support
 passlib[bcrypt]==1.7.4
 bcrypt==4.1.3

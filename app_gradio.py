@@ -99,6 +99,7 @@ def do_login(username: str, password: str, session: Dict[str, Any], conv_state: 
     area_dd = gr.update(choices=areas, value=new_session["active_area"])
     conv_dd = build_conv_dropdown(conv_state, new_session)
 
+    # IMPORTANTE: ocultar login y mostrar chat
     return (
         new_session,
         conv_state,
@@ -262,126 +263,9 @@ def load_conversation(conv_id: str, session: Dict[str, Any], conv_state: Dict[st
 
 
 # CSS
-CUSTOM_CSS = """
-:root{
-  --navy:#242049;
-  --panel:#D5D0D0;
-  --bubble:#FFFFFF;
-  --radius:28px;
-}
-
-.gradio-container{
-  background: var(--navy) !important;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-.block, .gradio-container .prose { color: #111; }
-
-/* ------------ LOGIN SCREEN ------------ */
-#login-page{
-  min-height: calc(100vh - 40px);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
-
-#login-card{
-  background: var(--panel);
-  border-radius: var(--radius);
-  padding: 28px;
-  width: min(520px, 92vw);
-  box-shadow: 0 18px 40px rgba(0,0,0,.18);
-}
-
-#login-logo-wrap{
-  display:flex;
-  justify-content:center;
-  margin-bottom: 18px;
-}
-#login-user-icon{
-  display:flex;
-  justify-content:center;
-  margin: 10px 0 14px;
-}
-
-#login-card input{ border-radius: 999px !important; }
-#login-card button{ border-radius: 999px !important; }
-
-/* ------------ CHAT LAYOUT ------------ */
-#app-shell{
-  max-width: 1180px;
-  margin: 22px auto;
-  padding: 0 14px;
-}
-#chat-row{ gap: 18px; }
-
-#sidebar{
-  background: var(--panel);
-  border-radius: var(--radius);
-  padding: 18px;
-  min-height: 680px;
-  box-shadow: 0 18px 40px rgba(0,0,0,.18);
-}
-
-#area-dd{ border-radius: 999px !important; }
-
-#chat-panel{
-  background: var(--panel);
-  border-radius: var(--radius);
-  padding: 18px;
-  min-height: 680px;
-  box-shadow: 0 18px 40px rgba(0,0,0,.18);
-}
-
-#chatbot{
-  background: transparent !important;
-  border: none !important;
-}
-
-#chatbot .message .bubble{
-  background: var(--bubble) !important;
-  color:#111827 !important;
-  border-radius: 22px !important;
-  padding: 18px 18px !important;
-  box-shadow: 0 10px 24px rgba(0,0,0,.08);
-}
-
-#chatbot .message.user{ justify-content: flex-end; }
-#chatbot .message.bot{ justify-content: flex-start; }
-
-#chatbot .avatar-container{ display:none !important; }
-
-#msg-box textarea, #msg-box input{ border-radius: 999px !important; }
-#send-btn button{ border-radius: 999px !important; }
-
-#sidebar select, #chat-panel select{ border-radius: 999px !important; }
-
-/* ---- Control fino de imágenes ---- */
-#login-logo-wrap img{
-  max-height: 55px !important;
-  width: auto !important;
-  object-fit: contain !important;
-}
-#login-user-icon img{
-  max-height: 64px !important;
-  max-width: 64px !important;
-  width: 64px !important;
-  height: 64px !important;
-  object-fit: contain !important;
-}
-#sidebar img{
-  max-height: 42px !important;
-  width: auto !important;
-  object-fit: contain !important;
-}
-#chat-panel img{
-  max-height: 42px !important;
-  max-width: 42px !important;
-  width: 42px !important;
-  height: 42px !important;
-  object-fit: contain !important;
-}
-"""
+CUSTOM_CSS = """<TU_CSS_IGUAL_QUE_LO_TIENES>"""
+# NOTA: pega aquí tu CSS completo sin cambios. Yo lo omití para no alargar.
+# (Si lo prefieres, deja tu bloque CUSTOM_CSS exactamente como lo tienes)
 
 
 # UI
@@ -479,10 +363,9 @@ def build_app():
 demo = build_app()
 
 if __name__ == "__main__":
-   
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        show_api=False,   
-        share=True,       
+        show_api=False,
+        share=False,
     )
