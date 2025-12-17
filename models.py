@@ -1,4 +1,3 @@
-# models.py
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Table
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -30,7 +29,7 @@ class Area(Base):
     __tablename__ = "areas"
 
     id = Column(Integer, primary_key=True, index=True)
-    slug = Column(String, unique=True, index=True)  # "logistica", "ventas"
-    name = Column(String)  # "Logística", "Ventas"
+    slug = Column(String, unique=True, index=True)  
+    name = Column(String)  
 
     users = relationship("User", secondary=user_area_table, back_populates="areas")

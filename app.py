@@ -14,28 +14,25 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from pathlib import Path as FsPath
 
-# lógica de RAG 
+# lógica de RAG
 from rag_core import answer_with_rag
 
-#  Autenticación y DB 
+# Autenticación y DB
 from auth import (
     get_db,
     get_current_user,
-    verify_password,
+    verify_and_migrate_password,  
     create_access_token,
     get_user_by_email,
 )
 from models import User  # Modelo User con relación a áreas
 from database import init_db
 
-#  Ingesta de documentos (PDF, Excel, etc.) 
+# Ingesta de documentos (PDF, Excel, etc.)
 from ingest import ingest_file_for_area
 
 # Inicializa la base de datos (crea tablas si no existen)
 init_db()
-
-
-# APP
 
 app = FastAPI(title="Comarket/AS2 Qwen RAG API por Áreas")
 
@@ -79,8 +76,7 @@ class AuthLoginResponse(BaseModel):
 
 def user_has_access_to_area(user: User, area_slug: str) -> bool:
     """
-    Verifica si el usuario tiene acceso a un área dada (por slug: 'logistica', 'ventas', etc.).
-    Asume que user.areas es una lista de objetos Area con atributo .slug
+    Verifica si el usuario tiene acceso a un área dada (slug: 'logistica', 'ventas', etc.).
     """
     if not area_slug:
         return True
@@ -111,10 +107,12 @@ def login(
 ):
     """
     Login clásico con email (username) y password.
-    Devuelve un access_token (JWT) que se usará en el header Authorization.
+    Devuelve un access_token (JWT) que se usará en Authorization: Bearer <token>
+
+    CAMBIO: usa verify_and_migrate_password() para soportar bcrypt legacy y migrar a PBKDF2.
     """
     user = get_user_by_email(db, form_data.username)
-    if not user or not verify_password(form_data.password, user.password_hash):
+    if not user or not verify_and_migrate_password(db, user, form_data.password):
         raise HTTPException(status_code=400, detail="Credenciales incorrectas")
 
     access_token = create_access_token(data={"sub": user.email})
@@ -135,12 +133,14 @@ def auth_login(
     }
 
     Devuelve:
-    - token  (JWT)
+    - token (JWT)
     - user_id
-    - areas  (lista de slugs de áreas a las que el usuario tiene acceso)
+    - areas (lista de slugs a las que tiene acceso)
+
+     CAMBIO: usa verify_and_migrate_password() para soportar bcrypt legacy y migrar a PBKDF2.
     """
     user = get_user_by_email(db, data.username)
-    if not user or not verify_password(data.password, user.password_hash):
+    if not user or not verify_and_migrate_password(db, user, data.password):
         raise HTTPException(status_code=400, detail="Credenciales incorrectas")
 
     access_token = create_access_token(data={"sub": user.email})
@@ -165,7 +165,7 @@ def get_me(current_user: User = Depends(get_current_user)):
     )
 
 
-# ENDPOINT GENERAL /chat (área opcional)
+# ENDPOINT GENERAL /chat 
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(
@@ -177,17 +177,15 @@ def chat(
     Permite área opcional en el body (req.area).
 
     Si req.area viene:
-      - Se valida que el usuario tenga acceso a esa área.
-      - Se pasa esa área a answer_with_rag.
+      - Valida que el usuario tenga acceso a esa área
+      - Pasa esa área a answer_with_rag
 
     Si req.area NO viene:
-      - Se puede usar un área por defecto o modo global (según tu rag_core).
+      - Se usa global o default según tu rag_core
     """
-
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="La pregunta (query) no puede estar vacía.")
 
-    # Validar acceso si se especifica área en el body
     if req.area and not user_has_access_to_area(current_user, req.area):
         raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
 
@@ -220,13 +218,11 @@ def chat_by_area(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Endpoint pensado para workspaces del WebUI y para el front por áreas.
-
-    - El área viene en la ruta.
-    - Se valida que el usuario tenga acceso a esa área.
-    - La pregunta viene en el body (req.query).
+    Endpoint por área:
+    - El área viene en la ruta
+    - Se valida acceso del usuario
+    - La pregunta viene en el body (req.query)
     """
-
     if not user_has_access_to_area(current_user, area):
         raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
 
@@ -255,9 +251,7 @@ def chat_by_area(
 
     return resp
 
-
 # ENDPOINT DE SUBIDA DE DOCUMENTOS POR ÁREA
-
 @app.post("/upload/{area}")
 def upload_file_for_area(
     area: str = Path(..., description="Área a la que pertenece el documento"),
@@ -265,23 +259,16 @@ def upload_file_for_area(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Sube un archivo (PDF, Excel, etc.) para un área específica.
-
-    - Valida que el usuario tenga acceso a esa área.
-    - Guarda el archivo en /data/docs/{area}/
-    - Llama a la función de ingesta para meterlo al RAG en la colección de esa área.
+    Sube un archivo para un área:
+    - Valida acceso
+    - Guarda en /data/docs/{area}/
+    - Ingesta a Chroma de esa área
     """
-
     if not user_has_access_to_area(current_user, area):
         raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
 
-    # (Opcional) limitar a admins
-    # if not current_user.is_admin:
-    #     raise HTTPException(status_code=403, detail="Solo admins pueden subir documentos")
-
     dest_path = save_uploaded_file(area, file)
 
-    # Llama a ingest.py
     try:
         ingest_file_for_area(dest_path, area=area)
     except Exception as e:
@@ -291,7 +278,6 @@ def upload_file_for_area(
         )
 
     return {"status": "ok", "filename": file.filename, "area": area}
-
 
 # Healthcheck
 

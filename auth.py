@@ -170,3 +170,10 @@ def get_current_user(
     if user is None:
         raise credentials_exception
     return user
+
+def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
+    user = get_user_by_email(db, email)
+    if not user:
+        return None
+    ok = verify_and_migrate_password(db, user, password)
+    return user if ok else None

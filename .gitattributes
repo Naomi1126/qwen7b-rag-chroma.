@@ -1,6 +1,5 @@
 * text=auto
 
-# Fuerza LF donde importa
 *.sh text eol=lf
 Dockerfile text eol=lf
 *.py text eol=lf

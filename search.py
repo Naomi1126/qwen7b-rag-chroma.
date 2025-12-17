@@ -26,7 +26,7 @@ else:
     print("[SEARCH] Sin área por defecto (modo global).")
 
 _embedder: Optional[SentenceTransformer] = None
-_collection_cache: Dict[Tuple[str, str], Any] = {}  # (chroma_dir, collection_name) -> collection
+_collection_cache: Dict[Tuple[str, str], Any] = {}  
 
 
 def _get_embedder() -> SentenceTransformer:

@@ -10,7 +10,7 @@ from search import search_docs
 VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
 VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-3B-Instruct")
 
-# ESTA es la clave: el backend debe usar la misma API key que vLLM
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "dummy-key")
 
 DEFAULT_AREA = os.getenv("AREA", None)

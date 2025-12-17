@@ -1,24 +1,27 @@
-from database import SessionLocal, init_db
-from models import User
+from database import SessionLocal
+from models import User, Area
 from auth import get_password_hash
 
-EMAIL = "admin@comarket.com"
-PASSWORD = "1234"
-NAME = "Administrador"
+ADMIN_EMAIL = "admin@comarket.com"
+ADMIN_PASSWORD = "1234"
 
-def main():
-    init_db()
-    db = SessionLocal()
-    u = db.query(User).filter(User.email == EMAIL).first()
+db = SessionLocal()
 
-    if not u:
-        u = User(email=EMAIL, name=NAME)
-        db.add(u)
-
-    # Siempre PBKDF2 
-    u.password_hash = get_password_hash(PASSWORD)
+admin = db.query(User).filter(User.email == ADMIN_EMAIL).first()
+if not admin:
+    admin = User(
+        email=ADMIN_EMAIL,
+        name="Administrador",
+        password_hash=get_password_hash(ADMIN_PASSWORD),
+        is_admin=True,
+    )
+    db.add(admin)
     db.commit()
-    print("OK admin listo:", EMAIL)
 
-if __name__ == "__main__":
-    main()
+all_areas = db.query(Area).all()
+admin.areas = all_areas
+admin.is_admin = True
+db.commit()
+
+print(" Admin asegurado con todas las áreas")
+

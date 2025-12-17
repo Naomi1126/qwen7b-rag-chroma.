@@ -18,10 +18,16 @@ set -euo pipefail
 : "${VLLM_API_URL:=http://127.0.0.1:8000/v1/chat/completions}"
 : "${VLLM_MODEL_NAME:=${MODEL}}"
 
+# Admin defaults 
+: "${ADMIN_EMAIL:=admin@comarket.com}"
+: "${ADMIN_PASSWORD:=1234}"
+: "${ADMIN_NAME:=Administrador}"
+
 export OPENAI_API_KEY OPENAI_API_BASE
 export VLLM_API_URL VLLM_MODEL_NAME
 export BACKEND_URL="http://127.0.0.1:${RAG_API_PORT}"
 export HF_HOME
+export ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME
 
 echo "[start] Configuración:"
 echo "  MODEL=${MODEL}"
@@ -33,6 +39,7 @@ echo "  OPENAI_API_BASE=${OPENAI_API_BASE}"
 echo "  VLLM_API_URL=${VLLM_API_URL}"
 echo "  VLLM_MODEL_NAME=${VLLM_MODEL_NAME}"
 echo "  BACKEND_URL=${BACKEND_URL}"
+echo "  ADMIN_EMAIL=${ADMIN_EMAIL}"
 
 echo "[start] Activando entorno virtual /opt/venv"
 source /opt/venv/bin/activate
@@ -40,7 +47,7 @@ source /opt/venv/bin/activate
 # Evitar duplicados si reinicias dentro del mismo contenedor
 pkill -f "vllm serve" 2>/dev/null || true
 pkill -f "uvicorn app:app" 2>/dev/null || true
-pkill -f "app_gradio.py" 2>/dev/null || true
+pkill -f "python.*app_gradio.py" 2>/dev/null || true
 
 # 1) Lanzar vLLM
 echo "[start] Lanzando vLLM con modelo: ${MODEL}"
@@ -69,7 +76,14 @@ for i in {1..180}; do
   sleep 1
 done
 
-# 2) Lanzar API RAG (FastAPI)
+# 2) Inicializar DB: áreas y admin 
+echo "[start] Inicializando áreas..."
+/opt/venv/bin/python /workspace/init_areas.py > /workspace/log_init_areas.log 2>&1 || true
+
+echo "[start] Inicializando/asegurando usuario admin..."
+/opt/venv/bin/python /workspace/init_admin.py > /workspace/log_init_admin.log 2>&1 || true
+
+# 3) Lanzar API RAG (FastAPI)
 echo "[start] Lanzando API RAG (FastAPI) en :${RAG_API_PORT}"
 /opt/venv/bin/uvicorn app:app \
   --host 0.0.0.0 \
@@ -79,11 +93,7 @@ echo "[start] Lanzando API RAG (FastAPI) en :${RAG_API_PORT}"
 API_PID=$!
 echo "[start] FastAPI PID=${API_PID} en :${RAG_API_PORT}"
 
-# 2.1) Asegurar admin (PBKDF2)
-echo "[start] Inicializando/asegurando usuario admin..."
-/opt/venv/bin/python /workspace/init_admin.py > /workspace/log_init_admin.log 2>&1 || true
-
-# 3) Lanzar frontend Gradio
+# 4) Lanzar frontend Gradio
 echo "[start] Lanzando frontend Gradio en :7860"
 export GRADIO_SERVER_NAME="0.0.0.0"
 export GRADIO_SERVER_PORT="7860"

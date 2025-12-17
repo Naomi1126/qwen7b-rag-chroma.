@@ -40,13 +40,14 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
 COPY requirements.txt /workspace/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /workspace/requirements.txt
 
-# 5.1) Reinstalar conjunto estable (evita "No API found" y drift)
+# 5.1) Reinstalar conjunto estable (evita "No API found" + evita drift + limpia caches)
 RUN /opt/venv/bin/pip install --no-cache-dir --upgrade --force-reinstall \
     "numpy==1.26.4" \
     "huggingface_hub==0.23.5" \
     "gradio==4.36.1" \
     "gradio-client==1.0.1" \
- && rm -rf /opt/venv/lib/python3.11/site-packages/gradio_client/__pycache__
+ && rm -rf /opt/venv/lib/python3.11/site-packages/gradio_client/__pycache__ \
+ && find /opt/venv/lib/python3.11/site-packages -name "*.pyc" -delete
 
 # 6) Limpieza
 RUN apt-get purge -y build-essential python3.11-dev && \
@@ -68,6 +69,8 @@ COPY --chown=app:app models.py /workspace/models.py
 COPY --chown=app:app database.py /workspace/database.py
 COPY --chown=app:app app_gradio.py /workspace/app_gradio.py
 COPY --chown=app:app init_admin.py /workspace/init_admin.py
+COPY --chown=app:app init_areas.py /workspace/init_areas.py
+
 COPY --chown=app:app static /workspace/static
 
 RUN chmod +x /workspace/start.sh

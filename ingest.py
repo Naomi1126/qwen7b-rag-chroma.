@@ -2,7 +2,7 @@ import os, sys, hashlib, argparse
 from pathlib import Path
 from typing import List, Dict, Optional
 
-import fitz  # PyMuPDF
+import fitz 
 import docx
 import openpyxl
 
