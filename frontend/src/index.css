@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-background: 229 52% 16%;
+    --color-foreground: 0 0% 100%;
+    --color-primary: 229 52% 16%;
+    --color-primary-foreground: 0 0% 100%;
+    --color-secondary: 229 40% 22%;
+    --color-secondary-foreground: 0 0% 100%;
+    --color-tertiary: 214 77% 46%;
+    --color-tertiary-foreground: 0 0% 100%;
+    --color-neutral: 0 0% 96%;
+    --color-neutral-foreground: 229 20% 22%;
+    --color-accent: 214 77% 46%;
+    --color-accent-foreground: 0 0% 100%;
+    --color-muted: 240 7% 90%;
+    --color-muted-foreground: 240 5% 35%;
+    --color-card: 0 0% 96%;
+    --color-card-foreground: 229 20% 22%;
+    --color-popover: 0 0% 100%;
+    --color-popover-foreground: 229 20% 22%;
+    --color-border: 240 6% 80%;
+    --color-input: 240 7% 90%;
+    --color-ring: 214 77% 46%;
+    --color-success: 142 43% 45%;
+    --color-warning: 33 94% 54%;
+    --color-destructive: 0 84% 60%;
+    --color-destructive-foreground: 0 0% 100%;
+    
+    --font-sans: "Inter", sans-serif;
+    --font-headline: "DM Sans", sans-serif;
+    
+    --radius: 1rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+}

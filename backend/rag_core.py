@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 import requests
 from requests import RequestException
 
-from search import search_docs
+from backend.search import search_docs
 
 VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
 VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-3B-Instruct")
