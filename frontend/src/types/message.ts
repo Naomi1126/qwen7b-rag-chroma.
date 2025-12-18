@@ -1,7 +1,7 @@
-export type Message = {
+export interface Message {
   id: string;
   content: string;
   isBot: boolean;
   timestamp: string;
-  userId?: string;
-};
+  conversationId?: string;
+}

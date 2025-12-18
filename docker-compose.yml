@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  qwen-rag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qwen-rag:latest
+    container_name: qwen-rag-app
+    
+    ports:
+      - "7860:7860"  # Frontend + API
+    
+    volumes:
+      # Persistir base de datos y documentos
+      - ./data:/data
+      # Cachear modelos de HuggingFace
+      - hf-cache:/workspace/hf
+    
+    environment:
+      # Modelo
+      - MODEL=Qwen/Qwen2.5-7B-Instruct
+      - MAX_MODEL_LEN=4096
+      - GPU_MEM_UTIL=0.6
+      - SWAP_SPACE_GB=20
+      
+      # vLLM
+      - OPENAI_API_KEY=dummy-key
+      - VLLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+      - VLLM_API_URL=http://127.0.0.1:8000/v1/chat/completions
+      
+      # FastAPI
+      - RAG_API_PORT=7860
+      
+      # Admin por defecto
+      - ADMIN_EMAIL=admin@comarket.com
+      - ADMIN_PASSWORD=1234
+      - ADMIN_NAME=Administrador
+      
+      # Seguridad
+      - SECRET_KEY=CAMBIA_ESTO_EN_PRODUCCION_POR_ALGO_MUY_LARGO_Y_ALEATORIO
+      - ACCESS_TOKEN_EXPIRE_MINUTES=480
+      
+      # Base de datos
+      - DATABASE_URL=sqlite:////data/comarket.db
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  hf-cache:
+    driver: local

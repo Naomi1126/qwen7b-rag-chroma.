@@ -1,4 +1,5 @@
 from typing import Optional, List, Dict, Any
+from pathlib import Path as FsPath
 
 from fastapi import (
     FastAPI,
@@ -10,11 +11,12 @@ from fastapi import (
     File,
 )
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from pathlib import Path as FsPath
 
-# lógica de RAG
+# Lógica de RAG
 from rag_core import answer_with_rag
 
 # Autenticación y DB
@@ -25,24 +27,24 @@ from auth import (
     create_access_token,
     get_user_by_email,
 )
-from models import User  # Modelo User con relación a áreas
+from models import User
 from database import init_db
 
-# Ingesta de documentos (PDF, Excel, etc.)
+# Ingesta de documentos
 from ingest import ingest_file_for_area
 
-# Inicializa la base de datos (crea tablas si no existen)
+# Inicializa la base de datos
 init_db()
 
-app = FastAPI(title="Comarket/AS2 Qwen RAG API por Áreas")
+app = FastAPI(title="Comarket/AS2 Qwen RAG API")
 
 
-# Pydantic Models
+# PYDANTIC MODELS
 
 class ChatRequest(BaseModel):
     query: str
     top_k: Optional[int] = 5
-    area: Optional[str] = None        # Para /chat general
+    area: Optional[str] = None
     return_context: Optional[bool] = False
     return_sources: Optional[bool] = False
 
@@ -60,33 +62,28 @@ class MeResponse(BaseModel):
     areas: List[str]
 
 
-# Modelos para /auth/login (JSON)
-class AuthLoginRequest(BaseModel):
+class LoginRequest(BaseModel):
     username: str
     password: str
 
 
-class AuthLoginResponse(BaseModel):
+class LoginResponse(BaseModel):
     token: str
     user_id: str
     areas: List[str]
 
 
-# Helpers
+# HELPERS
 
 def user_has_access_to_area(user: User, area_slug: str) -> bool:
-    """
-    Verifica si el usuario tiene acceso a un área dada (slug: 'logistica', 'ventas', etc.).
-    """
+    """Verifica si el usuario tiene acceso a un área."""
     if not area_slug:
         return True
     return any(a.slug == area_slug for a in user.areas)
 
 
 def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
-    """
-    Guarda el archivo subido en /data/docs/{area}/
-    """
+    """Guarda el archivo subido en /data/docs/{area}/"""
     base_dir = FsPath("/data/docs")
     area_dir = base_dir / area
     area_dir.mkdir(parents=True, exist_ok=True)
@@ -98,66 +95,38 @@ def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
     return dest_path
 
 
-# AUTH
+# API ENDPOINTS (bajo /api/*)
 
-@app.post("/login")
-def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+@app.post("/api/login", response_model=LoginResponse)
+def api_login(
+    data: LoginRequest,
     db: Session = Depends(get_db),
 ):
     """
-    Login clásico con email (username) y password.
-    Devuelve un access_token (JWT) que se usará en Authorization: Bearer <token>
-
-    CAMBIO: usa verify_and_migrate_password() para soportar bcrypt legacy y migrar a PBKDF2.
-    """
-    user = get_user_by_email(db, form_data.username)
-    if not user or not verify_and_migrate_password(db, user, form_data.password):
-        raise HTTPException(status_code=400, detail="Credenciales incorrectas")
-
-    access_token = create_access_token(data={"sub": user.email})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-
-@app.post("/auth/login", response_model=AuthLoginResponse)
-def auth_login(
-    data: AuthLoginRequest,
-    db: Session = Depends(get_db),
-):
-    """
-    Login pensado para el frontend (Gradio).
-    Recibe JSON:
-    {
-      "username": "...",
-      "password": "..."
-    }
-
-    Devuelve:
-    - token (JWT)
-    - user_id
-    - areas (lista de slugs a las que tiene acceso)
-
-     CAMBIO: usa verify_and_migrate_password() para soportar bcrypt legacy y migrar a PBKDF2.
+    Login para el frontend.
+    Recibe JSON: {"username": "...", "password": "..."}
+    Devuelve: {"token": "...", "user_id": "...", "areas": [...]}
     """
     user = get_user_by_email(db, data.username)
     if not user or not verify_and_migrate_password(db, user, data.password):
-        raise HTTPException(status_code=400, detail="Credenciales incorrectas")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas"
+        )
 
     access_token = create_access_token(data={"sub": user.email})
     areas = [area.slug for area in user.areas]
 
-    return AuthLoginResponse(
+    return LoginResponse(
         token=access_token,
         user_id=str(user.id),
         areas=areas,
     )
 
 
-@app.get("/me", response_model=MeResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    """
-    Devuelve datos básicos del usuario actual y la lista de áreas (slug) a las que tiene acceso.
-    """
+@app.get("/api/me", response_model=MeResponse)
+def api_me(current_user: User = Depends(get_current_user)):
+    """Devuelve datos del usuario actual."""
     return MeResponse(
         name=current_user.name,
         email=current_user.email,
@@ -165,29 +134,26 @@ def get_me(current_user: User = Depends(get_current_user)):
     )
 
 
-# ENDPOINT GENERAL /chat 
-
-@app.post("/chat", response_model=ChatResponse)
-def chat(
+@app.post("/api/chat", response_model=ChatResponse)
+def api_chat(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Endpoint general.
+    Endpoint general de chat.
     Permite área opcional en el body (req.area).
-
-    Si req.area viene:
-      - Valida que el usuario tenga acceso a esa área
-      - Pasa esa área a answer_with_rag
-
-    Si req.area NO viene:
-      - Se usa global o default según tu rag_core
     """
     if not req.query or not req.query.strip():
-        raise HTTPException(status_code=400, detail="La pregunta (query) no puede estar vacía.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La pregunta (query) no puede estar vacía."
+        )
 
     if req.area and not user_has_access_to_area(current_user, req.area):
-        raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a esta área"
+        )
 
     result = answer_with_rag(
         user_query=req.query,
@@ -209,28 +175,30 @@ def chat(
     return resp
 
 
-# ENDPOINT POR ÁREA /chat/{area}
-
-@app.post("/chat/{area}", response_model=ChatResponse)
-def chat_by_area(
-    area: str = Path(..., description="Área solicitada: logistica, ventas, sistemas, etc."),
+@app.post("/api/chat/{area}", response_model=ChatResponse)
+def api_chat_by_area(
+    area: str = Path(..., description="Área: logistica, ventas, sistemas, etc."),
     req: Optional[ChatRequest] = None,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Endpoint por área:
-    - El área viene en la ruta
-    - Se valida acceso del usuario
-    - La pregunta viene en el body (req.query)
+    Endpoint de chat por área específica.
+    El área viene en la ruta.
     """
     if not user_has_access_to_area(current_user, area):
-        raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a esta área"
+        )
 
     query = req.query if req else None
     top_k = req.top_k if req and req.top_k is not None else 5
 
     if not query or not query.strip():
-        raise HTTPException(status_code=400, detail="La pregunta (query) no puede estar vacía.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La pregunta (query) no puede estar vacía."
+        )
 
     result = answer_with_rag(
         user_query=query,
@@ -251,21 +219,22 @@ def chat_by_area(
 
     return resp
 
-# ENDPOINT DE SUBIDA DE DOCUMENTOS POR ÁREA
-@app.post("/upload/{area}")
-def upload_file_for_area(
-    area: str = Path(..., description="Área a la que pertenece el documento"),
+
+@app.post("/api/upload/{area}")
+def api_upload_file(
+    area: str = Path(..., description="Área del documento"),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Sube un archivo para un área:
-    - Valida acceso
-    - Guarda en /data/docs/{area}/
-    - Ingesta a Chroma de esa área
+    Sube un archivo para un área.
+    Requiere autenticación y acceso al área.
     """
     if not user_has_access_to_area(current_user, area):
-        raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a esta área"
+        )
 
     dest_path = save_uploaded_file(area, file)
 
@@ -273,14 +242,54 @@ def upload_file_for_area(
         ingest_file_for_area(dest_path, area=area)
     except Exception as e:
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al ingestar el archivo: {e}",
         )
 
     return {"status": "ok", "filename": file.filename, "area": area}
 
-# Healthcheck
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+@app.get("/api/health")
+def api_health():
+    """Health check del backend."""
+    return {"status": "ok", "service": "FastAPI + vLLM RAG"}
+
+
+# SERVIR FRONTEND (React/Vite)
+
+# Verificar si existe el directorio dist/
+DIST_DIR = FsPath("/workspace/dist")
+
+if DIST_DIR.exists() and DIST_DIR.is_dir():
+    # Montar assets estáticos
+    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
+    
+    print(f"[FastAPI] Frontend encontrado en {DIST_DIR}")
+    
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """
+        Sirve el frontend React.
+        - Si la ruta empieza con 'api/', retorna 404 (ya se manejó arriba)
+        - Para cualquier otra ruta, sirve index.html (SPA routing)
+        """
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+        
+        # Servir index.html para todas las rutas (SPA)
+        index_path = DIST_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(str(index_path))
+        
+        raise HTTPException(status_code=404, detail="Frontend not found")
+else:
+    print("[FastAPI]   Directorio /workspace/dist no encontrado.")
+    print("[FastAPI] El frontend no se servirá. Solo API disponible en /api/*")
+    
+    @app.get("/")
+    async def root():
+        return {
+            "message": "FastAPI RAG Backend",
+            "note": "Frontend no disponible. Build el frontend con 'npm run build' primero.",
+            "api_docs": "/docs"
+        }

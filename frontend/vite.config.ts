@@ -18,4 +18,27 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  // Proxy para desarrollo: redirige /api/* al backend
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:7860',
+        changeOrigin: true,
+      },
+    },
+  },
+  // Configuración de build
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+        },
+      },
+    },
+  },
 });

@@ -1,9 +1,58 @@
-.git
-.github
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+.npm
+.yarn
+
+# Frontend build (se genera en Docker)
+frontend/dist/
+frontend/.vite/
+frontend/build/
+
+# Python
 __pycache__/
-*.pyc
-.env
-.env.*
-.vscode
-.idea
-/data/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.pytest_cache/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docs
+README.md
+*.md
+
+# Logs
+*.log
+log_*.log
+
+# Data (se monta como volumen)
+data/
+*.db
+*.sqlite
+
+# CI/CD
+.github/

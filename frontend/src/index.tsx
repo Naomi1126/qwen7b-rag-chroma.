@@ -1,13 +1,21 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import { AnimaProvider } from '@animaapp/playground-react-sdk';
-import App from './App';
-import './index.css';
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import "./index.css";
+import App from "./App";
+import { AuthProvider } from "./contexts/AuthContext";
+import { Toaster } from "@/components/ui/toaster";
 
-ReactDOM.createRoot(document.getElementById('app')!).render(
-  <React.StrictMode>
-    <AnimaProvider>
+const rootElement = document.getElementById("root");
+
+if (!rootElement) {
+  throw new Error("Root element not found");
+}
+
+createRoot(rootElement).render(
+  <StrictMode>
+    <AuthProvider>
       <App />
-    </AnimaProvider>
-  </React.StrictMode>
+      <Toaster />
+    </AuthProvider>
+  </StrictMode>
 );

@@ -27,11 +27,9 @@ export function Sidebar({
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <img
-              src="https://c.animaapp.com/mjbrr0m9PX7F5K/img/ai_1.png"
-              alt="Comarket Logo"
-              className="h-8 w-auto"
-            />
+            <div className="h-8 w-8 rounded bg-accent flex items-center justify-center">
+              <span className="text-accent-foreground font-bold text-sm">CM</span>
+            </div>
             <div>
               <h2 className="font-headline text-lg font-bold text-foreground">Comarket</h2>
               <p className="text-xs text-gray-300">S.A. de C.V.</p>
@@ -99,13 +97,16 @@ export function Sidebar({
             <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
               <User className="w-4 h-4 text-muted-foreground" />
             </div>
-            <span className="text-sm text-foreground font-medium">{userName}</span>
+            <span className="text-sm text-foreground font-medium truncate max-w-[150px]">
+              {userName}
+            </span>
           </div>
           <Button
             onClick={onLogout}
             variant="ghost"
             size="icon"
             className="text-gray-400 hover:text-foreground hover:bg-secondary-foreground/10"
+            title="Cerrar sesión"
           >
             <LogOut className="w-4 h-4" />
           </Button>

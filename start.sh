@@ -1,3 +1,4 @@
+#!/bin/bash
 set -euo pipefail
 
 # Variables de entorno base
@@ -11,8 +12,8 @@ set -euo pipefail
 : "${OPENAI_API_KEY:=dummy-key}"
 : "${OPENAI_API_BASE:=http://127.0.0.1:8000/v1}"
 
-# FastAPI RAG
-: "${RAG_API_PORT:=9001}"
+# FastAPI en puerto 7860 
+: "${RAG_API_PORT:=7860}"
 
 # rag_core.py
 : "${VLLM_API_URL:=http://127.0.0.1:8000/v1/chat/completions}"
@@ -25,7 +26,6 @@ set -euo pipefail
 
 export OPENAI_API_KEY OPENAI_API_BASE
 export VLLM_API_URL VLLM_MODEL_NAME
-export BACKEND_URL="http://127.0.0.1:${RAG_API_PORT}"
 export HF_HOME
 export ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME
 
@@ -38,7 +38,7 @@ echo "  SWAP_SPACE_GB=${SWAP_SPACE_GB}"
 echo "  OPENAI_API_BASE=${OPENAI_API_BASE}"
 echo "  VLLM_API_URL=${VLLM_API_URL}"
 echo "  VLLM_MODEL_NAME=${VLLM_MODEL_NAME}"
-echo "  BACKEND_URL=${BACKEND_URL}"
+echo "  RAG_API_PORT=${RAG_API_PORT}"
 echo "  ADMIN_EMAIL=${ADMIN_EMAIL}"
 
 echo "[start] Activando entorno virtual /opt/venv"
@@ -47,12 +47,12 @@ source /opt/venv/bin/activate
 # Evitar duplicados si reinicias dentro del mismo contenedor
 pkill -f "vllm serve" 2>/dev/null || true
 pkill -f "uvicorn app:app" 2>/dev/null || true
-pkill -f "python.*app_gradio.py" 2>/dev/null || true
 
-# 1) Lanzar vLLM
+# 1) Lanzar vLLM (interno, puerto 8000)
 echo "[start] Lanzando vLLM con modelo: ${MODEL}"
 /opt/venv/bin/vllm serve "${MODEL}" \
-  --host 0.0.0.0 --port 8000 \
+  --host 127.0.0.1 \
+  --port 8000 \
   --tensor-parallel-size 1 \
   --max-model-len "${MAX_MODEL_LEN}" \
   --gpu-memory-utilization "${GPU_MEM_UTIL}" \
@@ -64,9 +64,9 @@ echo "[start] Lanzando vLLM con modelo: ${MODEL}"
   > /workspace/log_vllm.log 2>&1 &
 
 VLLM_PID=$!
-echo "[start] vLLM PID=${VLLM_PID} en :8000"
+echo "[start] vLLM PID=${VLLM_PID} (interno :8000)"
 
-echo "[start] Esperando a que vLLM responda en :8000 ..."
+echo "[start] Esperando a que vLLM responda..."
 VLLM_READY="0"
 for i in {1..180}; do
   if curl -sSf http://127.0.0.1:8000/v1/models \
@@ -90,27 +90,20 @@ echo "[start] Inicializando áreas..."
 echo "[start] Inicializando/asegurando usuario admin..."
 /opt/venv/bin/python /workspace/init_admin.py > /workspace/log_init_admin.log 2>&1 || true
 
-# 3) Lanzar API RAG (FastAPI)
-echo "[start] Lanzando API RAG (FastAPI) en :${RAG_API_PORT}"
+# 3) Lanzar FastAPI en puerto 7860 (frontend + API)
+echo "[start] Lanzando FastAPI en :${RAG_API_PORT} (frontend + API)"
 /opt/venv/bin/uvicorn app:app \
   --host 0.0.0.0 \
   --port "${RAG_API_PORT}" \
-  > /workspace/log_rag_api.log 2>&1 &
+  > /workspace/log_api.log 2>&1 &
 
 API_PID=$!
 echo "[start] FastAPI PID=${API_PID} en :${RAG_API_PORT}"
 
-# 4) Lanzar frontend Gradio
-echo "[start] Lanzando frontend Gradio en :7860"
-export GRADIO_SERVER_NAME="0.0.0.0"
-export GRADIO_SERVER_PORT="7860"
-export GRADIO_ANALYTICS_ENABLED="False"
+echo "[start]  Servicios listos:"
+echo "  - vLLM (interno): http://127.0.0.1:8000"
+echo "  - FastAPI: http://0.0.0.0:${RAG_API_PORT}"
+echo ""
+echo "[start] Accede a la aplicación en: http://localhost:${RAG_API_PORT}"
 
-/opt/venv/bin/python /workspace/app_gradio.py \
-  > /workspace/log_gradio.log 2>&1 &
-
-GRADIO_PID=$!
-echo "[start] Gradio PID=${GRADIO_PID} en :7860"
-
-echo "[start] Todos los servicios lanzados. Esperando que alguno termine..."
 wait -n
