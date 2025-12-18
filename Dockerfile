@@ -5,16 +5,18 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
 
-# Copiar package files
+# Copiar package files (incluye package.json y, si existe, package-lock.json)
 COPY frontend/package*.json ./
 
-# Instalar dependencias
-RUN npm ci --only=production
+# Instalar dependencias necesarias para BUILD (incluye devDependencies)
+# - npm ci requiere package-lock.json
+# - si no existe lockfile, usamos npm install
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Copiar código fuente
 COPY frontend/ ./
 
-# Build para producción
+# Build para producción (genera dist/)
 RUN npm run build
 
 # Verificar que se generó dist/
