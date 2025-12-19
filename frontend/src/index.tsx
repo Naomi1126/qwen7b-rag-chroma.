@@ -5,10 +5,10 @@ import App from "./App";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Toaster } from "@/components/ui/toaster";
 
-const rootElement = document.getElementById("root");
+const rootElement = document.getElementById("app");
 
 if (!rootElement) {
-  throw new Error("Root element not found");
+  throw new Error('Root element not found. Expected <div id="app"></div> in index.html');
 }
 
 createRoot(rootElement).render(

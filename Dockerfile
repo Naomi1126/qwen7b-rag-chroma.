@@ -1,6 +1,5 @@
-# ==========================================
+
 # STAGE 1: Build Frontend (Node)
-# ==========================================
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
@@ -13,14 +12,14 @@ COPY frontend/package*.json ./
 # - si no existe lockfile, usamos npm install
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-# Copiar código fuente
+# Copiar código fuente del frontend
 COPY frontend/ ./
 
 # Build para producción (genera dist/)
 RUN npm run build
 
 # Verificar que se generó dist/
-RUN ls -la dist/
+RUN echo "=== FRONTEND DIST ===" && ls -la dist/
 
 
 # ==========================================
@@ -75,10 +74,17 @@ RUN apt-get purge -y build-essential python3.11-dev && \
 RUN useradd -m app && chown -R app:app /workspace && \
     mkdir -p /data/docs /data/chroma && chown -R app:app /data
 
-# 8) Copiar frontend build desde stage 1
+# 8) Copiar frontend build desde stage 1 (esto es lo que se sirve)
 COPY --from=frontend-builder --chown=app:app /frontend/dist /workspace/dist
 
-# 9) Copiar código del backend
+# 8.1) Copiar también el código fuente del frontend al runtime (para inspección/debug)
+# Esto NO afecta lo servido (lo servido es /workspace/dist), pero te deja ver src dentro del contenedor.
+COPY --from=frontend-builder --chown=app:app /frontend /workspace/frontend
+
+# Quitar node_modules del runtime para que no pese tanto (opcional pero recomendado)
+RUN rm -rf /workspace/frontend/node_modules || true
+
+# 9) Copiar código del backend (aplanado)
 COPY --chown=app:app start.sh /workspace/start.sh
 COPY --chown=app:app backend/ingest.py /workspace/ingest.py
 COPY --chown=app:app backend/search.py /workspace/search.py
@@ -99,6 +105,7 @@ RUN chmod +x /workspace/start.sh
 # 11) Verificar estructura final
 RUN echo "=== Verificando estructura ===" && \
     ls -la /workspace/dist/ && \
+    ls -la /workspace/frontend/src/ && \
     ls -la /workspace/*.py
 
 USER app
