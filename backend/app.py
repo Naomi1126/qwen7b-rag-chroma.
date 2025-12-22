@@ -35,13 +35,10 @@ from ingest import ingest_file_for_area
 # Inicializa la base de datos (crea tablas si no existen)
 init_db()
 
-# ✅ Cambiado: título “Aria”
 app = FastAPI(title="Aria - Asistente Virtual")
 
 
-# ---------------------------
 # PYDANTIC MODELS
-# ---------------------------
 
 class ChatRequest(BaseModel):
     query: str
@@ -75,9 +72,7 @@ class LoginResponse(BaseModel):
     areas: List[str]
 
 
-# ---------------------------
 # HELPERS
-# ---------------------------
 
 def user_has_access_to_area(user: User, area_slug: str) -> bool:
     """Verifica si el usuario tiene acceso a un área."""
@@ -99,9 +94,7 @@ def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
     return dest_path
 
 
-# ---------------------------
 # API ENDPOINTS (bajo /api/*)
-# ---------------------------
 
 @app.post("/api/login", response_model=LoginResponse)
 def api_login(
@@ -261,9 +254,7 @@ def api_health():
     return {"status": "ok", "service": "FastAPI + vLLM RAG (Aria)"}
 
 
-# ---------------------------
 # SERVIR FRONTEND (React/Vite)
-# ---------------------------
 
 DIST_DIR = FsPath("/workspace/dist")
 
