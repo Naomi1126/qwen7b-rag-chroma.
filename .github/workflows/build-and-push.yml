@@ -4,12 +4,17 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'Dockerfile'
-      - 'requirements.txt'
-      - 'start.sh'
-      - 'ingest.py'
-      - 'search.py'
-      - '.github/workflows/build-and-push.yml'
+    - 'Dockerfile'
+    - 'requirements.txt'
+    - 'start.sh'
+    - 'ingest.py'
+    - 'search.py'
+    - 'app.py'
+    - 'rag_core.py'
+    - 'init_admin.py'
+    - 'init_areas.py'
+    - 'database.py'
+    - '.github/workflows/build-and-push.yml'
   workflow_dispatch:
 
 env:
