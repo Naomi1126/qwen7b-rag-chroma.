@@ -29,7 +29,6 @@ export function LoginPage() {
     
     try {
       await login(username, password);
-      // El redirect a ChatPage se hace automáticamente por App.tsx
     } catch (err) {
       console.error("Login failed:", err);
       setError(true);
@@ -105,7 +104,7 @@ export function LoginPage() {
               </Button>
 
               <p className="text-xs text-muted-foreground text-center">
-                Usuario por defecto: admin@comarket.com / 1234
+              
               </p>
             </form>
           </Card>

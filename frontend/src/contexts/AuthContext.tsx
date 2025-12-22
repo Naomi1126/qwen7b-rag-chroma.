@@ -53,7 +53,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       const data = await response.json();
       setUser({
-        id: '', // El endpoint /api/me no devuelve ID, lo dejamos vacío
+        id: '', 
         name: data.name,
         email: data.email,
         areas: data.areas,
@@ -95,7 +95,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setUser({
         id: data.user_id,
-        name: username.split('@')[0], // Nombre temporal desde el email
+        name: username.split('@')[0], 
         email: username,
         areas: data.areas,
       });

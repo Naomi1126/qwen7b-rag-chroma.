@@ -4,11 +4,11 @@ from sqlalchemy.orm import sessionmaker
 
 from models import Base
 
-# Base de datos persistente en /data (Docker) o local (desarrollo)
+# Base de datos persistente en 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "sqlite:////data/comarket.db"  # Producción (Docker)
-)
+    "sqlite:////data/comarket.db"  )
+
 
 # Fallback para desarrollo local sin /data
 if not os.path.exists("/data") and DATABASE_URL.startswith("sqlite:////data"):

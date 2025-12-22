@@ -10,7 +10,6 @@ from fastapi import (
     UploadFile,
     File,
 )
-from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -23,7 +22,7 @@ from rag_core import answer_with_rag
 from auth import (
     get_db,
     get_current_user,
-    verify_and_migrate_password,  
+    verify_and_migrate_password,
     create_access_token,
     get_user_by_email,
 )
@@ -33,13 +32,16 @@ from database import init_db
 # Ingesta de documentos
 from ingest import ingest_file_for_area
 
-# Inicializa la base de datos
+# Inicializa la base de datos (crea tablas si no existen)
 init_db()
 
-app = FastAPI(title="Comarket/AS2 Qwen RAG API")
+# ✅ Cambiado: título “Aria”
+app = FastAPI(title="Aria - Asistente Virtual")
 
 
+# ---------------------------
 # PYDANTIC MODELS
+# ---------------------------
 
 class ChatRequest(BaseModel):
     query: str
@@ -73,7 +75,9 @@ class LoginResponse(BaseModel):
     areas: List[str]
 
 
+# ---------------------------
 # HELPERS
+# ---------------------------
 
 def user_has_access_to_area(user: User, area_slug: str) -> bool:
     """Verifica si el usuario tiene acceso a un área."""
@@ -95,7 +99,9 @@ def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
     return dest_path
 
 
+# ---------------------------
 # API ENDPOINTS (bajo /api/*)
+# ---------------------------
 
 @app.post("/api/login", response_model=LoginResponse)
 def api_login(
@@ -252,20 +258,20 @@ def api_upload_file(
 @app.get("/api/health")
 def api_health():
     """Health check del backend."""
-    return {"status": "ok", "service": "FastAPI + vLLM RAG"}
+    return {"status": "ok", "service": "FastAPI + vLLM RAG (Aria)"}
 
 
+# ---------------------------
 # SERVIR FRONTEND (React/Vite)
+# ---------------------------
 
-# Verificar si existe el directorio dist/
 DIST_DIR = FsPath("/workspace/dist")
 
 if DIST_DIR.exists() and DIST_DIR.is_dir():
-    # Montar assets estáticos
     app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
-    
+
     print(f"[FastAPI] Frontend encontrado en {DIST_DIR}")
-    
+
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         """
@@ -275,21 +281,20 @@ if DIST_DIR.exists() and DIST_DIR.is_dir():
         """
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
-        
-        # Servir index.html para todas las rutas (SPA)
+
         index_path = DIST_DIR / "index.html"
         if index_path.exists():
             return FileResponse(str(index_path))
-        
+
         raise HTTPException(status_code=404, detail="Frontend not found")
 else:
     print("[FastAPI]   Directorio /workspace/dist no encontrado.")
     print("[FastAPI] El frontend no se servirá. Solo API disponible en /api/*")
-    
+
     @app.get("/")
     async def root():
         return {
-            "message": "FastAPI RAG Backend",
+            "message": "FastAPI RAG Backend (Aria)",
             "note": "Frontend no disponible. Build el frontend con 'npm run build' primero.",
             "api_docs": "/docs"
         }

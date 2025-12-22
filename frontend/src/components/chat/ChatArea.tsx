@@ -31,7 +31,7 @@ export function ChatArea({ messages, isLoading }: ChatAreaProps) {
         <div className="text-center max-w-md px-4">
           <Bot className="w-16 h-16 mx-auto mb-4 text-accent" />
           <h2 className="text-2xl font-headline font-bold text-foreground mb-2">
-            Bienvenido al Asistente Virtual
+            Bienvenido, soy Aria, tu Asistente Virtual
           </h2>
           <p className="text-gray-400">
             Inicia una conversación escribiendo tu consulta abajo.

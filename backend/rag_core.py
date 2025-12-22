@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -16,6 +17,29 @@ DEFAULT_AREA = os.getenv("AREA", None)
 
 MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "12000"))
 MAX_COMPLETION_TOKENS = int(os.getenv("RAG_MAX_COMPLETION_TOKENS", "512"))
+
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Aria")
+
+_SMALLTALK_PATTERNS = [
+    r"^hola$",
+    r"^buenas$",
+    r"^hey$",
+    r"^hello$",
+    r"^hi$",
+    r"^buenos dias$",
+    r"^buenos días$",
+    r"^buenas tardes$",
+    r"^buenas noches$",
+]
+
+def _normalize(text: str) -> str:
+    text = text.strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+def is_greeting(query: str) -> bool:
+    q = _normalize(query)
+    return any(re.match(p, q) for p in _SMALLTALK_PATTERNS)
 
 
 def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dict[str, Any]:
@@ -73,16 +97,27 @@ def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dic
 
 
 def call_model_with_context(user_query: str, context: str, area: Optional[str] = None) -> str:
+    
+    if is_greeting(user_query):
+        return f"¡Hola!  Soy {ASSISTANT_NAME}. ¿En qué puedo ayudarte hoy?"
+
+    # ✅ 2) Fallback amable si no hay contexto
     if not context.strip():
-        return "No encontré información relevante en los documentos indexados para responder esta pregunta."
+        area_hint = f" del área **{area}**" if area else ""
+        return (
+            f"No encontré información{area_hint} en los documentos para responder eso todavía .\n\n"
+            "Para ayudarte mejor, dime una de estas opciones:\n"
+            "• ¿De qué área es? (general, sistemas, logística, finanzas, ventas)\n"
+            "• ¿Qué documento o dato necesitas?\n"
+        )
 
     system_prompt = (
-        "Eres un asistente experto que responde ÚNICAMENTE con base en la información del contexto proporcionado. "
-        "Si la respuesta no está en el contexto, dilo claramente.\n\n"
-        "En el contexto pueden aparecer datos provenientes de hojas de cálculo. "
-        "Cada fila de Excel se representa típicamente como:\n"
-        "'Hoja: NOMBRE_HOJA | Fila: NUMERO | Columna1: valor | Columna2: valor | ...'.\n"
-        "Menciona hoja y fila si aplica."
+        f"Eres {ASSISTANT_NAME}, un asistente virtual corporativo amable, claro y profesional.\n"
+        "Reglas:\n"
+        "1) Responde principalmente con base en el CONTEXTO proporcionado.\n"
+        "2) Si la respuesta NO está en el contexto, dilo con tacto y pide un dato extra.\n"
+        "3) Si el contexto incluye datos de Excel, menciona hoja y fila si aplica.\n"
+        "4) Mantén un tono cordial; evita sonar seco."
     )
 
     area_text = f"(Área: {area})\n\n" if area else ""
@@ -92,7 +127,7 @@ def call_model_with_context(user_query: str, context: str, area: Optional[str] =
         f"Contexto de soporte (extraído de documentos internos):\n\n"
         f"{context}\n\n"
         f"Pregunta del usuario:\n{user_query}\n\n"
-        f"Si la información no está en el contexto, responde que no está disponible."
+        f"Si la información no está en el contexto, indícalo y sugiere qué dato falta."
     )
 
     payload = {
