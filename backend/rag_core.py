@@ -1,19 +1,20 @@
 import os
 import sys
 import re
+import unicodedata
 from typing import List, Dict, Any, Optional
 
 import requests
 from requests import RequestException
 
-from search import search_docs
+from search import search_docs, search_exact
 
 VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
 VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-3B-Instruct")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "dummy-key")
 
-DEFAULT_AREA = os.getenv("AREA", None)
+DEFAULT_AREA = (os.getenv("AREA", "general") or "general").strip()
 
 MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "12000"))
 MAX_COMPLETION_TOKENS = int(os.getenv("RAG_MAX_COMPLETION_TOKENS", "512"))
@@ -30,26 +31,59 @@ _SMALLTALK_PATTERNS = [
     r"^buenos días$",
     r"^buenas tardes$",
     r"^buenas noches$",
+    r"^holi$",
 ]
+
+# Detecta contenedores comunes. Agrega prefijos si tu operación usa otros.
+CONTAINER_RE = re.compile(r"\b(?:MSMU|BMOU|TGHU|CAIU|MSCU|OOLU|TEMU)[A-Z0-9]{6,}\b", re.I)
+
 
 def _normalize(text: str) -> str:
     text = text.strip().lower()
     text = re.sub(r"\s+", " ", text)
     return text
 
+
+def normalize_area(area: Optional[str]) -> Optional[str]:
+    if not area:
+        return None
+    a = area.strip().lower()
+    a = unicodedata.normalize("NFKD", a).encode("ascii", "ignore").decode("ascii")
+    a = a.replace(" ", "_")
+    return a or None
+
+
 def is_greeting(query: str) -> bool:
     q = _normalize(query)
     return any(re.match(p, q) for p in _SMALLTALK_PATTERNS)
 
 
-def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dict[str, Any]:
-    if area is None:
-        area = DEFAULT_AREA
+def detect_exact_lookup(query: str) -> Optional[Dict[str, str]]:
+    """
+    Si hay un ID claro (contenedor), hacemos lookup exacto por metadata.
+    Puedes extender luego a factura/remisión/pi si quieres.
+    """
+    m = CONTAINER_RE.search(query)
+    if m:
+        return {"field": "contenedor", "value": m.group(0).upper()}
+    return None
 
-    print(f"[RAG] build_context() → área usada: {area if area else '(global)'}")
+
+def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dict[str, Any]:
+    area_norm = normalize_area(area) or normalize_area(DEFAULT_AREA) or "general"
+
+    print(f"[RAG] build_context() → área usada: {area_norm}")
     print(f"[RAG] top_k = {top_k}")
 
-    results = search_docs(query, top_k=top_k, area=area)
+    exact = detect_exact_lookup(query)
+    if exact:
+        print(f"[RAG] Detectado ID exacto → {exact['field']}={exact['value']}")
+        results = search_exact(exact["field"], exact["value"], top_k=max(top_k, 50), area=area_norm)
+        if not results:
+            print("[RAG] Exact lookup sin resultados → fallback a embeddings")
+            results = search_docs(query, top_k=top_k, area=area_norm)
+    else:
+        results = search_docs(query, top_k=top_k, area=area_norm)
 
     chunks: List[str] = []
     sources: List[Dict[str, Any]] = []
@@ -93,31 +127,29 @@ def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dic
 
     context = sep.join(context_parts)
 
-    return {"context": context, "sources": sources, "area": area}
+    return {"context": context, "sources": sources, "area": area_norm}
 
 
 def call_model_with_context(user_query: str, context: str, area: Optional[str] = None) -> str:
-    
     if is_greeting(user_query):
-        return f"¡Hola!  Soy {ASSISTANT_NAME}. ¿En qué puedo ayudarte hoy?"
+        return f"¡Hola! Soy {ASSISTANT_NAME}. ¿En qué puedo ayudarte hoy?"
 
-    # ✅ 2) Fallback amable si no hay contexto
     if not context.strip():
         area_hint = f" del área **{area}**" if area else ""
         return (
-            f"No encontré información{area_hint} en los documentos para responder eso todavía .\n\n"
+            f"No encontré información{area_hint} en los documentos para responder eso todavía.\n\n"
             "Para ayudarte mejor, dime una de estas opciones:\n"
-            "• ¿De qué área es? (general, sistemas, logística, finanzas, ventas)\n"
             "• ¿Qué documento o dato necesitas?\n"
         )
 
     system_prompt = (
         f"Eres {ASSISTANT_NAME}, un asistente virtual corporativo amable, claro y profesional.\n"
         "Reglas:\n"
-        "1) Responde principalmente con base en el CONTEXTO proporcionado.\n"
-        "2) Si la respuesta NO está en el contexto, dilo con tacto y pide un dato extra.\n"
-        "3) Si el contexto incluye datos de Excel, menciona hoja y fila si aplica.\n"
-        "4) Mantén un tono cordial; evita sonar seco."
+        "1) Responde SOLO con base en el CONTEXTO proporcionado.\n"
+        "2) Si la respuesta NO está en el contexto, dilo con tacto y pide UN solo dato faltante.\n"
+        "3) Si el contexto incluye datos de Excel, NO combines datos de filas diferentes como si fueran el mismo registro.\n"
+        "4) Si el contexto incluye datos de Excel, cita hoja y fila para cada dato clave.\n"
+        "5) Mantén un tono cordial; evita sonar seco."
     )
 
     area_text = f"(Área: {area})\n\n" if area else ""
@@ -127,7 +159,9 @@ def call_model_with_context(user_query: str, context: str, area: Optional[str] =
         f"Contexto de soporte (extraído de documentos internos):\n\n"
         f"{context}\n\n"
         f"Pregunta del usuario:\n{user_query}\n\n"
-        f"Si la información no está en el contexto, indícalo y sugiere qué dato falta."
+        "Instrucciones:\n"
+        "- Si hay varias filas, lista cada fila por separado (no combines campos entre filas).\n"
+        "- Si no hay información suficiente, indícalo y pide UN solo dato faltante.\n"
     )
 
     payload = {

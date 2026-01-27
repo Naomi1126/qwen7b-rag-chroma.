@@ -26,7 +26,7 @@ else:
     print("[SEARCH] Sin área por defecto (modo global).")
 
 _embedder: Optional[SentenceTransformer] = None
-_collection_cache: Dict[Tuple[str, str], Any] = {}  
+_collection_cache: Dict[Tuple[str, str], Any] = {}
 
 
 def _get_embedder() -> SentenceTransformer:
@@ -45,14 +45,6 @@ def _get_embedder() -> SentenceTransformer:
 
 
 def _get_collection(area: Optional[str] = None):
-    """
-    - Si area es None → modo global:
-        path = BASE_CHROMA_DIR
-        collection_name = BASE_COLLECTION_NAME
-    - Si area tiene valor → subcarpeta y colección por área:
-        path = BASE_CHROMA_DIR / area
-        collection_name = BASE_COLLECTION_NAME + "_" + area
-    """
     if area:
         chroma_dir = os.path.join(BASE_CHROMA_DIR, area)
         collection_name = f"{BASE_COLLECTION_NAME}_{area}"
@@ -79,10 +71,7 @@ def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[
     print(f"[SEARCH] Consulta en área: {area if area else '(global)'}")
     embedder = _get_embedder()
 
-    emb = embedder.encode(
-        [query],
-        normalize_embeddings=True,
-    ).tolist()
+    emb = embedder.encode([query], normalize_embeddings=True).tolist()
 
     res = collection.query(
         query_embeddings=emb,
@@ -101,6 +90,47 @@ def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[
                 "text": doc,
                 "metadata": meta if isinstance(meta, dict) else {},
                 "distance": float(dist),
+            }
+        )
+    return results
+
+
+def search_exact(field: str, value: str, top_k: int = 50, area: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Lookup exacto por metadata (ideal para Excel: contenedor/factura/pi/remision/modelo).
+    Requiere que ingest haya guardado ese campo en metadata.
+    """
+    if area is None:
+        area = DEFAULT_AREA
+
+    collection = _get_collection(area)
+
+    val = str(value).strip()
+    if field in ("contenedor", "factura", "pi", "remision", "modelo"):
+        val = val.upper()
+
+    print(f"[SEARCH] Exact lookup en área: {area if area else '(global)'} → {field}={val}")
+
+    try:
+        res = collection.get(
+            where={field: val},
+            limit=top_k,
+            include=["documents", "metadatas"],
+        )
+    except Exception as e:
+        print(f"[SEARCH] ERROR exact lookup: {e}")
+        return []
+
+    docs = res.get("documents", []) or []
+    metas = res.get("metadatas", []) or []
+
+    results: List[Dict[str, Any]] = []
+    for doc, meta in zip(docs, metas):
+        results.append(
+            {
+                "text": doc,
+                "metadata": meta if isinstance(meta, dict) else {},
+                "distance": 0.0,
             }
         )
     return results

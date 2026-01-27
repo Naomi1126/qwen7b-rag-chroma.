@@ -1,8 +1,8 @@
-import os, sys, hashlib, argparse
+import os, sys, hashlib, argparse, re
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Tuple
 
-import fitz 
+import fitz
 import docx
 import openpyxl
 
@@ -77,47 +77,174 @@ def extract_docx(p: Path) -> List[Dict]:
     ]
 
 
+# =========================
+# Excel ingest “tabular”
+# =========================
+
+PIVOT_BAD_HEADERS = {"etiquetas de fila", "etiquetas de columna", "total general", "suma de"}
+
+KEY_PATTERNS = {
+    "contenedor": re.compile(r"\bcontenedor\b|\bcontainer\b|\bcntr\b", re.I),
+    "factura": re.compile(r"\bfactura\b|\binvoice\b", re.I),
+    "pi": re.compile(r"\bpi\b|\bp\.?i\.?\b", re.I),
+    "remision": re.compile(r"\bremisi[oó]n\b|\bremision\b|\brm\b", re.I),
+    "modelo": re.compile(r"\bmodelo\b|\bmodel\b", re.I),
+    "piezas": re.compile(r"\bpiezas\b|\bqty\b|\bpcs\b|\bpieces\b", re.I),
+    "estatus": re.compile(r"\bestatus\b|\bstatus\b|\bestado\b", re.I),
+    "anio": re.compile(r"\ba[nñ]o\b|\byear\b", re.I),
+    "mes": re.compile(r"\bmes\b|\bmonth\b", re.I),
+    "semana": re.compile(r"\bsemana\b|\bweek\b", re.I),
+    "transporte": re.compile(r"\btransporte\b|\bcarrier\b|\btransport\b", re.I),
+    "modalidad": re.compile(r"\bmodalidad\b|\bmode\b", re.I),
+    "retailer": re.compile(r"\bretailer\b|\bcliente\b|\btienda\b", re.I),
+}
+
+IMPORTANT_ORDER = [
+    "contenedor", "piezas", "factura", "pi", "remision",
+    "modelo", "estatus", "anio", "mes", "semana",
+    "transporte", "modalidad", "retailer",
+]
+
+
+def _norm_header(h: Any) -> str:
+    if h is None:
+        return ""
+    return str(h).strip()
+
+
+def _norm_id(v: Any) -> str:
+    s = str(v).strip()
+    return s.upper()
+
+
+def _is_pivot_like(headers: List[str]) -> bool:
+    low = " ".join([h.lower() for h in headers if h])
+    return any(bad in low for bad in PIVOT_BAD_HEADERS)
+
+
+def _find_header_row(ws, max_scan: int = 40, min_nonempty: int = 5) -> Optional[int]:
+    best_row = None
+    best_score = 0.0
+
+    for r_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=max_scan, values_only=True), start=1):
+        headers = [_norm_header(c) for c in row]
+        nonempty = [h for h in headers if h]
+        if len(nonempty) < min_nonempty:
+            continue
+
+        strings = sum(1 for c in row if isinstance(c, str) and str(c).strip())
+        score = len(nonempty) + 0.2 * strings
+
+        if _is_pivot_like(nonempty):
+            score *= 0.2
+
+        if score > best_score:
+            best_score = score
+            best_row = r_idx
+
+    return best_row
+
+
+def _pick_key_meta(headers: List[str], row_values: Tuple[Any, ...]) -> Dict[str, Any]:
+    found: Dict[str, Any] = {}
+    for h, v in zip(headers, row_values):
+        if not h or v is None:
+            continue
+        hs = str(h).strip()
+        if not hs:
+            continue
+        vs = str(v).strip()
+        if not vs:
+            continue
+
+        for key, pat in KEY_PATTERNS.items():
+            if pat.search(hs):
+                if key in ("contenedor", "factura", "pi", "remision", "modelo"):
+                    found[key] = _norm_id(vs)
+                else:
+                    found[key] = vs
+    return found
+
+
+def _build_row_text(
+    ws_title: str,
+    row_idx: int,
+    headers: List[str],
+    row_values: Tuple[Any, ...],
+    key_meta: Dict[str, Any],
+    max_extra: int = 12,
+) -> str:
+    parts: List[str] = [f"Hoja: {ws_title}", f"Fila: {row_idx}"]
+
+    for k in IMPORTANT_ORDER:
+        if k in key_meta:
+            parts.append(f"{k}: {key_meta[k]}")
+
+    extra = 0
+    for h, v in zip(headers, row_values):
+        if extra >= max_extra:
+            break
+        if not h or v is None:
+            continue
+        hs = str(h).strip()
+        vs = str(v).strip()
+        if not hs or not vs:
+            continue
+
+        if any(KEY_PATTERNS[key].search(hs) for key in KEY_PATTERNS):
+            continue
+
+        parts.append(f"{hs}: {vs}")
+        extra += 1
+
+    return " | ".join(parts)
+
+
 def extract_xlsx(p: Path) -> List[Dict]:
     wb = openpyxl.load_workbook(str(p), data_only=True)
     out: List[Dict] = []
 
     for ws in wb.worksheets:
-        first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
-        if first_row is None:
+        header_row = _find_header_row(ws)
+        if header_row is None:
             continue
 
-        headers: List[str] = []
-        for cell in first_row:
-            headers.append("" if cell is None else str(cell).strip())
+        header_values = next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True), None)
+        if not header_values:
+            continue
 
-        for row_idx, row_values in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            parts: List[str] = []
-            for col_name, value in zip(headers, row_values):
-                if not col_name or not col_name.strip():
-                    continue
-                if value is None:
-                    continue
-                val_str = str(value).strip()
-                if val_str == "":
-                    continue
-                parts.append(f"{col_name}: {val_str}")
+        headers = [_norm_header(c) for c in header_values]
+        nonempty_headers = [h for h in headers if h]
 
-            if not parts:
+        if len(nonempty_headers) < 5:
+            continue
+        if _is_pivot_like(nonempty_headers):
+            continue
+
+        data_start = header_row + 1
+
+        for row_idx, row_values in enumerate(ws.iter_rows(min_row=data_start, values_only=True), start=data_start):
+            if row_values is None:
                 continue
 
-            row_text = f"Hoja: {ws.title} | Fila: {row_idx} | " + " | ".join(parts)
+            has_any = any(v is not None and str(v).strip() != "" for v in row_values)
+            if not has_any:
+                continue
 
-            out.append(
-                {
-                    "text": row_text,
-                    "metadata": {
-                        "path": str(p),
-                        "type": "xlsx",
-                        "sheet": ws.title,
-                        "row": row_idx,
-                    },
-                }
-            )
+            key_meta = _pick_key_meta(headers, row_values)
+            row_text = _build_row_text(ws.title, row_idx, headers, row_values, key_meta)
+
+            meta = {
+                "path": str(p),
+                "type": "xlsx",
+                "sheet": ws.title,
+                "row": row_idx,
+                "header_row": header_row,
+                **key_meta,
+            }
+
+            out.append({"text": row_text, "metadata": meta})
+
     return out
 
 
@@ -194,6 +321,12 @@ def ingest_single_file(p: Path, area: Optional[str], model: SentenceTransformer,
         print(f"[SKIP] {p} (no se pudo extraer texto)")
         return 0
 
+    # Re-index limpio por archivo (evita basura vieja)
+    try:
+        coll.delete(where={"path": str(p)})
+    except Exception:
+        pass
+
     base_id = file_sha1(p)[:12]
     ids, metadatas, texts = [], [], []
 
@@ -205,15 +338,9 @@ def ingest_single_file(p: Path, area: Optional[str], model: SentenceTransformer,
         metadatas.append(meta)
         texts.append(d["text"])
 
-    # Re-index idempotente
-    if ids:
-        try:
-            coll.delete(ids=ids)
-        except Exception:
-            pass
-
     embs = model.encode(texts, normalize_embeddings=True).tolist()
     coll.add(ids=ids, documents=texts, embeddings=embs, metadatas=metadatas)
+
     print(f"[OK] {p} → {len(ids)} chunks indexados")
     return len(ids)
 

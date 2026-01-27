@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any
 from pathlib import Path as FsPath
+import unicodedata
 
 from fastapi import (
     FastAPI,
@@ -38,8 +39,48 @@ init_db()
 app = FastAPI(title="Aria - Asistente Virtual")
 
 
-# PYDANTIC MODELS
+# -----------------------------
+# HELPERS (áreas)
+# -----------------------------
+def normalize_area(area: Optional[str]) -> Optional[str]:
+    """
+    Normaliza área:
+    - lower
+    - quita acentos (logística -> logistica)
+    - espacios -> underscore
+    - si queda vacío -> None
+    """
+    if not area:
+        return None
+    a = area.strip().lower()
+    a = unicodedata.normalize("NFKD", a).encode("ascii", "ignore").decode("ascii")
+    a = a.replace(" ", "_")
+    return a or None
 
+
+def user_has_access_to_area(user: User, area_slug: str) -> bool:
+    """Verifica si el usuario tiene acceso a un área."""
+    if not area_slug:
+        return True
+    return any(a.slug == area_slug for a in user.areas)
+
+
+def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
+    """Guarda el archivo subido en /data/docs/{area}/"""
+    base_dir = FsPath("/data/docs")
+    area_dir = base_dir / area
+    area_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_path = area_dir / file.filename
+    with dest_path.open("wb") as f:
+        f.write(file.file.read())
+
+    return dest_path
+
+
+# -----------------------------
+# PYDANTIC MODELS
+# -----------------------------
 class ChatRequest(BaseModel):
     query: str
     top_k: Optional[int] = 5
@@ -72,30 +113,9 @@ class LoginResponse(BaseModel):
     areas: List[str]
 
 
-# HELPERS
-
-def user_has_access_to_area(user: User, area_slug: str) -> bool:
-    """Verifica si el usuario tiene acceso a un área."""
-    if not area_slug:
-        return True
-    return any(a.slug == area_slug for a in user.areas)
-
-
-def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
-    """Guarda el archivo subido en /data/docs/{area}/"""
-    base_dir = FsPath("/data/docs")
-    area_dir = base_dir / area
-    area_dir.mkdir(parents=True, exist_ok=True)
-
-    dest_path = area_dir / file.filename
-    with dest_path.open("wb") as f:
-        f.write(file.file.read())
-
-    return dest_path
-
-
+# -----------------------------
 # API ENDPOINTS (bajo /api/*)
-
+# -----------------------------
 @app.post("/api/login", response_model=LoginResponse)
 def api_login(
     data: LoginRequest,
@@ -148,7 +168,9 @@ def api_chat(
             detail="La pregunta (query) no puede estar vacía."
         )
 
-    if req.area and not user_has_access_to_area(current_user, req.area):
+    req_area = normalize_area(req.area)
+
+    if req_area and not user_has_access_to_area(current_user, req_area):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes acceso a esta área"
@@ -157,7 +179,7 @@ def api_chat(
     result = answer_with_rag(
         user_query=req.query,
         top_k=req.top_k or 5,
-        area=req.area,
+        area=req_area,
     )
 
     resp = ChatResponse(
@@ -184,7 +206,15 @@ def api_chat_by_area(
     Endpoint de chat por área específica.
     El área viene en la ruta.
     """
-    if not user_has_access_to_area(current_user, area):
+    area_norm = normalize_area(area)
+
+    if not area_norm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Área inválida"
+        )
+
+    if not user_has_access_to_area(current_user, area_norm):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes acceso a esta área"
@@ -202,7 +232,7 @@ def api_chat_by_area(
     result = answer_with_rag(
         user_query=query,
         top_k=top_k,
-        area=area,
+        area=area_norm,
     )
 
     resp = ChatResponse(
@@ -229,23 +259,28 @@ def api_upload_file(
     Sube un archivo para un área.
     Requiere autenticación y acceso al área.
     """
-    if not user_has_access_to_area(current_user, area):
+    area_norm = normalize_area(area)
+
+    if not area_norm:
+        raise HTTPException(status_code=400, detail="Área inválida")
+
+    if not user_has_access_to_area(current_user, area_norm):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes acceso a esta área"
         )
 
-    dest_path = save_uploaded_file(area, file)
+    dest_path = save_uploaded_file(area_norm, file)
 
     try:
-        ingest_file_for_area(dest_path, area=area)
+        ingest_file_for_area(dest_path, area=area_norm)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al ingestar el archivo: {e}",
         )
 
-    return {"status": "ok", "filename": file.filename, "area": area}
+    return {"status": "ok", "filename": file.filename, "area": area_norm}
 
 
 @app.get("/api/health")
@@ -254,8 +289,9 @@ def api_health():
     return {"status": "ok", "service": "FastAPI + vLLM RAG (Aria)"}
 
 
+# -----------------------------
 # SERVIR FRONTEND (React/Vite)
-
+# -----------------------------
 DIST_DIR = FsPath("/workspace/dist")
 
 if DIST_DIR.exists() and DIST_DIR.is_dir():
