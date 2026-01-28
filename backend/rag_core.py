@@ -7,6 +7,9 @@ from typing import List, Dict, Any, Optional
 import requests
 from requests import RequestException
 
+# Mantén tus funciones existentes:
+# - search_docs(query, top_k, area)  -> embeddings search por área
+# - search_exact(field, value, top_k, area) -> exact lookup por área
 from search import search_docs, search_exact
 
 VLLM_API_URL = os.getenv("VLLM_API_URL", "http://127.0.0.1:8000/v1/chat/completions")
@@ -14,7 +17,8 @@ VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-3B-Instruct")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "dummy-key")
 
-DEFAULT_AREA = (os.getenv("AREA", "general") or "general").strip()
+# IMPORTANT: ya NO forzamos general si no llega área
+DEFAULT_AREA = (os.getenv("AREA", "") or "").strip() or None
 
 MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "12000"))
 MAX_COMPLETION_TOKENS = int(os.getenv("RAG_MAX_COMPLETION_TOKENS", "512"))
@@ -69,21 +73,132 @@ def detect_exact_lookup(query: str) -> Optional[Dict[str, str]]:
     return None
 
 
-def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dict[str, Any]:
-    area_norm = normalize_area(area) or normalize_area(DEFAULT_AREA) or "general"
+def list_indexed_areas(chroma_dir: str = "/data/chroma") -> List[str]:
+    """
+    Detecta áreas indexadas por subcarpetas en /data/chroma/<area>.
+    Esto hace que NO dependas del dropdown del front.
+    """
+    try:
+        if not os.path.isdir(chroma_dir):
+            return []
+        out: List[str] = []
+        for name in sorted(os.listdir(chroma_dir)):
+            p = os.path.join(chroma_dir, name)
+            if os.path.isdir(p) and not name.startswith("."):
+                out.append(name)
+        return out
+    except Exception:
+        return []
 
-    print(f"[RAG] build_context() → área usada: {area_norm}")
+
+def _merge_and_rank(all_results: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
+    """
+    Ordena por distancia (menor = mejor) y recorta.
+    Nota: tu 'search_exact' puede no traer distance; si no hay, le ponemos una.
+    """
+    fixed: List[Dict[str, Any]] = []
+    for r in all_results:
+        rr = dict(r)
+        if rr.get("distance") is None:
+            rr["distance"] = 0.0  # exact match se considera muy relevante
+        fixed.append(rr)
+
+    fixed.sort(key=lambda x: float(x.get("distance", 1e9)))
+    return fixed[:top_k]
+
+
+def _ensure_area_in_meta(results: List[Dict[str, Any]], area: str) -> List[Dict[str, Any]]:
+    out = []
+    for r in results:
+        rr = dict(r)
+        meta = rr.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.setdefault("area", area)
+        rr["metadata"] = meta
+        out.append(rr)
+    return out
+
+
+def _search_embeddings_multi(query: str, top_k: int, areas: List[str]) -> List[Dict[str, Any]]:
+    """
+    Busca por embeddings en múltiples áreas y mezcla.
+    """
+    all_results: List[Dict[str, Any]] = []
+    per_area_k = max(top_k, 5)
+
+    for a in areas:
+        try:
+            rs = search_docs(query, top_k=per_area_k, area=a)
+            all_results.extend(_ensure_area_in_meta(rs, a))
+        except Exception as e:
+            print(f"[RAG] WARN embeddings en área '{a}' falló: {e}", file=sys.stderr)
+
+    return _merge_and_rank(all_results, top_k)
+
+
+def _search_exact_multi(field: str, value: str, top_k: int, areas: List[str]) -> List[Dict[str, Any]]:
+    """
+    Exact lookup en múltiples áreas y mezcla.
+    """
+    all_results: List[Dict[str, Any]] = []
+    per_area_k = max(top_k, 50)
+
+    for a in areas:
+        try:
+            rs = search_exact(field, value, top_k=per_area_k, area=a)
+            all_results.extend(_ensure_area_in_meta(rs, a))
+        except Exception as e:
+            print(f"[RAG] WARN exact lookup en área '{a}' falló: {e}", file=sys.stderr)
+
+    return _merge_and_rank(all_results, top_k)
+
+
+def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dict[str, Any]:
+    # Si front manda área -> úsala. Si no, NO forces "general".
+    area_norm = normalize_area(area) or normalize_area(DEFAULT_AREA)
+
+    # Si no hay área, buscamos en todas las áreas que existan en /data/chroma
+    if area_norm:
+        areas_to_search = [area_norm]
+    else:
+        areas_to_search = list_indexed_areas("/data/chroma")
+
+    print(f"[RAG] build_context() → área recibida: {area_norm if area_norm else '(no enviada)'}")
+    print(f"[RAG] Áreas a buscar: {areas_to_search if areas_to_search else '(ninguna)'}")
     print(f"[RAG] top_k = {top_k}")
 
     exact = detect_exact_lookup(query)
-    if exact:
+
+    # 1) Exact lookup si detecta ID
+    results: List[Dict[str, Any]] = []
+    if exact and areas_to_search:
         print(f"[RAG] Detectado ID exacto → {exact['field']}={exact['value']}")
-        results = search_exact(exact["field"], exact["value"], top_k=max(top_k, 50), area=area_norm)
+        if len(areas_to_search) == 1:
+            results = search_exact(exact["field"], exact["value"], top_k=max(top_k, 50), area=areas_to_search[0])
+            results = _ensure_area_in_meta(results, areas_to_search[0])
+        else:
+            results = _search_exact_multi(exact["field"], exact["value"], top_k=max(top_k, 50), areas=areas_to_search)
+
         if not results:
             print("[RAG] Exact lookup sin resultados → fallback a embeddings")
-            results = search_docs(query, top_k=top_k, area=area_norm)
-    else:
-        results = search_docs(query, top_k=top_k, area=area_norm)
+
+    # 2) Embeddings fallback si no hubo exact o no encontró
+    if not results:
+        if not areas_to_search:
+            # no hay áreas indexadas: no podemos buscar
+            return {"context": "", "sources": [], "area": None, "areas_searched": []}
+
+        if len(areas_to_search) == 1:
+            results = search_docs(query, top_k=top_k, area=areas_to_search[0])
+            results = _ensure_area_in_meta(results, areas_to_search[0])
+        else:
+            results = _search_embeddings_multi(query, top_k=top_k, areas=areas_to_search)
+
+    # detectar área del mejor resultado (para mostrarla y dejar de culpar "general")
+    detected_area: Optional[str] = None
+    if results:
+        detected_area = (results[0].get("metadata") or {}).get("area")
 
     chunks: List[str] = []
     sources: List[Dict[str, Any]] = []
@@ -94,11 +209,11 @@ def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dic
         distance = r.get("distance")
 
         chunks.append(text)
-
         sources.append(
             {
                 "path": meta.get("path"),
                 "type": meta.get("type"),
+                "area": meta.get("area"),
                 "sheet": meta.get("sheet"),
                 "row": meta.get("row"),
                 "page": meta.get("page"),
@@ -127,19 +242,29 @@ def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dic
 
     context = sep.join(context_parts)
 
-    return {"context": context, "sources": sources, "area": area_norm}
+    return {
+        "context": context,
+        "sources": sources,
+        "area": detected_area or area_norm,      # área "detectada" por resultados
+        "areas_searched": areas_to_search,       # áreas que realmente se buscaron
+    }
 
 
-def call_model_with_context(user_query: str, context: str, area: Optional[str] = None) -> str:
+def call_model_with_context(user_query: str, context: str, area: Optional[str] = None, areas_searched: Optional[List[str]] = None) -> str:
     if is_greeting(user_query):
         return f"¡Hola! Soy {ASSISTANT_NAME}. ¿En qué puedo ayudarte hoy?"
 
     if not context.strip():
-        area_hint = f" del área **{area}**" if area else ""
+        hint = ""
+        if area:
+            hint = f" (área detectada: {area})"
+        elif areas_searched:
+            hint = f" (busqué en: {', '.join(areas_searched)})"
         return (
-            f"No encontré información{area_hint} en los documentos para responder eso todavía.\n\n"
-            "Para ayudarte mejor, dime una de estas opciones:\n"
-            "• ¿Qué documento o dato necesitas?\n"
+            f"No encontré información en los documentos{hint} para responder eso todavía.\n\n"
+            "Para ayudarte mejor:\n"
+            "• dame un identificador único (contenedor, remisión, factura, PI)\n"
+            "• o selecciona el área (logistica, sistemas, general)\n"
         )
 
     system_prompt = (
@@ -152,10 +277,14 @@ def call_model_with_context(user_query: str, context: str, area: Optional[str] =
         "5) Mantén un tono cordial; evita sonar seco."
     )
 
-    area_text = f"(Área: {area})\n\n" if area else ""
+    header = ""
+    if area:
+        header += f"(Área detectada: {area})\n"
+    if areas_searched:
+        header += f"(Áreas buscadas: {', '.join(areas_searched)})\n"
 
     user_content = (
-        f"{area_text}"
+        f"{header}\n"
         f"Contexto de soporte (extraído de documentos internos):\n\n"
         f"{context}\n\n"
         f"Pregunta del usuario:\n{user_query}\n\n"
@@ -206,8 +335,15 @@ def answer_with_rag(user_query: str, top_k: int = 5, area: Optional[str] = None)
     ctx = build_context(user_query, top_k=top_k, area=area)
     context = ctx["context"]
     sources = ctx["sources"]
-    used_area = ctx["area"]
+    used_area = ctx.get("area")
+    areas_searched = ctx.get("areas_searched", [])
 
-    answer = call_model_with_context(user_query, context, area=used_area)
+    answer = call_model_with_context(user_query, context, area=used_area, areas_searched=areas_searched)
 
-    return {"answer": answer, "context": context, "sources": sources, "area": used_area}
+    return {
+        "answer": answer,
+        "context": context,
+        "sources": sources,
+        "area": used_area,
+        "areas_searched": areas_searched,
+    }
