@@ -72,7 +72,6 @@ def _get_collection(area: Optional[str] = None):
 def list_indexed_areas() -> List[str]:
     """
     Devuelve las áreas detectadas por subcarpetas en BASE_CHROMA_DIR.
-    Ej: /data/chroma/logistica, /data/chroma/sistemas, ...
     """
     try:
         if not os.path.isdir(BASE_CHROMA_DIR):
@@ -111,12 +110,53 @@ def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[
     results: List[Dict[str, Any]] = []
     for doc, meta, dist in zip(docs, metas, dists):
         m = meta if isinstance(meta, dict) else {}
-        # Asegura que el resultado tenga "area" si venía en metadata
         results.append(
             {
                 "text": doc,
                 "metadata": m,
                 "distance": float(dist),
+            }
+        )
+    return results
+
+
+def search_exact(field: str, value: str, top_k: int = 50, area: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Lookup exacto por metadata: where={field: value}
+    Devuelve resultados con distance=0.0 para priorizarlos.
+    """
+    if not field or value is None:
+        return []
+    if area is None:
+        area = DEFAULT_AREA
+
+    collection = _get_collection(area)
+    where = {field: value}
+
+    # OJO: chroma.get() puede traer muchos; ponemos un cap fuerte por seguridad
+    hard_cap = int(os.getenv("EXACT_LOOKUP_HARD_CAP", "500"))
+    want = max(1, min(int(top_k or 50), hard_cap))
+
+    try:
+        res = collection.get(
+            where=where,
+            include=["documents", "metadatas"],
+        )
+    except Exception as e:
+        print(f"[SEARCH] ERROR search_exact where={where} area={area}: {e}", file=sys.stderr)
+        return []
+
+    docs = res.get("documents") or []
+    metas = res.get("metadatas") or []
+
+    results: List[Dict[str, Any]] = []
+    for doc, meta in list(zip(docs, metas))[:want]:
+        m = meta if isinstance(meta, dict) else {}
+        results.append(
+            {
+                "text": doc,
+                "metadata": m,
+                "distance": 0.0,
             }
         )
     return results
@@ -130,11 +170,9 @@ def search_docs_multi(query: str, top_k: int = 5, areas: Optional[List[str]] = N
         areas = list_indexed_areas()
 
     if not areas:
-        # fallback: intenta área por defecto, si existe
         return search_docs(query, top_k=top_k, area=DEFAULT_AREA)
 
     all_results: List[Dict[str, Any]] = []
-    # Pedimos un poco más por área y luego recortamos
     per_area_k = max(top_k, 5)
 
     for a in areas:
@@ -149,7 +187,6 @@ def search_docs_multi(query: str, top_k: int = 5, areas: Optional[List[str]] = N
         except Exception as e:
             print(f"[SEARCH] WARN: falló búsqueda en área '{a}': {e}", file=sys.stderr)
 
-    # Ordena globalmente por distancia (menor = más cercano)
     all_results.sort(key=lambda x: x.get("distance", 1e9))
     return all_results[:top_k]
 

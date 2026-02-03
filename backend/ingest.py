@@ -1,6 +1,6 @@
 import os, sys, hashlib, argparse, re
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Iterable
 
 import fitz
 import docx
@@ -17,6 +17,8 @@ BASE_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "docs")
 EMBED_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 HF_HOME = os.getenv("HF_HOME", "/workspace/hf")
+
+EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "256"))
 
 
 def file_sha1(p: Path) -> str:
@@ -48,33 +50,27 @@ def chunk_text(text: str, max_chars: int = 1200, overlap: int = 150) -> List[str
     return chunks
 
 
-def extract_pdf(p: Path) -> List[Dict]:
-    out = []
+def extract_pdf(p: Path) -> Iterable[Dict]:
     with fitz.open(p) as doc:
         for i, page in enumerate(doc):
             txt = page.get_text("text")
             for j, ch in enumerate(chunk_text(txt)):
-                out.append(
-                    {
-                        "text": ch,
-                        "metadata": {
-                            "path": str(p),
-                            "type": "pdf",
-                            "page": i + 1,
-                            "chunk": j,
-                        },
-                    }
-                )
-    return out
+                yield {
+                    "text": ch,
+                    "metadata": {
+                        "path": str(p),
+                        "type": "pdf",
+                        "page": i + 1,
+                        "chunk": j,
+                    },
+                }
 
 
-def extract_docx(p: Path) -> List[Dict]:
+def extract_docx(p: Path) -> Iterable[Dict]:
     d = docx.Document(str(p))
     txt = "\n".join([para.text for para in d.paragraphs])
-    return [
-        {"text": ch, "metadata": {"path": str(p), "type": "docx"}}
-        for ch in chunk_text(txt)
-    ]
+    for ch in chunk_text(txt):
+        yield {"text": ch, "metadata": {"path": str(p), "type": "docx"}}
 
 
 # =========================
@@ -145,6 +141,23 @@ def _find_header_row(ws, max_scan: int = 40, min_nonempty: int = 5) -> Optional[
     return best_row
 
 
+def _dedupe_headers(headers: List[str]) -> List[str]:
+    """
+    Evita columnas duplicadas: A, A → A, A__2
+    """
+    seen: Dict[str, int] = {}
+    out: List[str] = []
+    for h in headers:
+        key = h.strip() if h else ""
+        if not key:
+            out.append("")
+            continue
+        c = seen.get(key, 0) + 1
+        seen[key] = c
+        out.append(key if c == 1 else f"{key}__{c}")
+    return out
+
+
 def _pick_key_meta(headers: List[str], row_values: Tuple[Any, ...]) -> Dict[str, Any]:
     found: Dict[str, Any] = {}
     for h, v in zip(headers, row_values):
@@ -200,9 +213,9 @@ def _build_row_text(
     return " | ".join(parts)
 
 
-def extract_xlsx(p: Path) -> List[Dict]:
-    wb = openpyxl.load_workbook(str(p), data_only=True)
-    out: List[Dict] = []
+def extract_xlsx(p: Path) -> Iterable[Dict]:
+    # Clave para Excel grande
+    wb = openpyxl.load_workbook(str(p), data_only=True, read_only=True)
 
     for ws in wb.worksheets:
         header_row = _find_header_row(ws)
@@ -214,6 +227,7 @@ def extract_xlsx(p: Path) -> List[Dict]:
             continue
 
         headers = [_norm_header(c) for c in header_values]
+        headers = _dedupe_headers(headers)
         nonempty_headers = [h for h in headers if h]
 
         if len(nonempty_headers) < 5:
@@ -243,20 +257,16 @@ def extract_xlsx(p: Path) -> List[Dict]:
                 **key_meta,
             }
 
-            out.append({"text": row_text, "metadata": meta})
-
-    return out
+            yield {"text": row_text, "metadata": meta}
 
 
-def extract_txt(p: Path) -> List[Dict]:
+def extract_txt(p: Path) -> Iterable[Dict]:
     txt = Path(p).read_text(encoding="utf-8", errors="ignore")
-    return [
-        {"text": ch, "metadata": {"path": str(p), "type": "txt"}}
-        for ch in chunk_text(txt)
-    ]
+    for ch in chunk_text(txt):
+        yield {"text": ch, "metadata": {"path": str(p), "type": "txt"}}
 
 
-def extract_any(p: Path) -> List[Dict]:
+def extract_any(p: Path) -> Iterable[Dict]:
     ext = p.suffix.lower()
     if ext == ".pdf":
         return extract_pdf(p)
@@ -266,7 +276,7 @@ def extract_any(p: Path) -> List[Dict]:
         return extract_xlsx(p)
     if ext == ".txt":
         return extract_txt(p)
-    return []
+    return iter(())
 
 
 def parse_args() -> argparse.Namespace:
@@ -314,35 +324,63 @@ def get_collection(area: Optional[str]):
     return client.get_or_create_collection(collection_name)
 
 
+def _flush_batch(coll, model: SentenceTransformer, ids: List[str], texts: List[str], metas: List[Dict[str, Any]]) -> int:
+    if not ids:
+        return 0
+    embs = model.encode(texts, normalize_embeddings=True).tolist()
+    coll.add(ids=ids, documents=texts, embeddings=embs, metadatas=metas)
+    return len(ids)
+
+
 def ingest_single_file(p: Path, area: Optional[str], model: SentenceTransformer, coll) -> int:
     print(f"[INGEST] {p}")
-    docs = extract_any(p)
-    if not docs:
-        print(f"[SKIP] {p} (no se pudo extraer texto)")
-        return 0
 
-    # Re-index limpio por archivo (evita basura vieja)
+    docs_iter = extract_any(p)
+
+    # Re-index limpio por archivo
     try:
         coll.delete(where={"path": str(p)})
     except Exception:
         pass
 
     base_id = file_sha1(p)[:12]
-    ids, metadatas, texts = [], [], []
 
-    for k, d in enumerate(docs):
-        ids.append(f"{base_id}-{k}")
-        meta = dict(d["metadata"]) if isinstance(d["metadata"], dict) else {}
+    ids_batch: List[str] = []
+    texts_batch: List[str] = []
+    metas_batch: List[Dict[str, Any]] = []
+
+    total = 0
+    k = 0
+
+    for d in docs_iter:
+        text = d.get("text")
+        meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+        if not text:
+            continue
+
         if area:
             meta["area"] = area
-        metadatas.append(meta)
-        texts.append(d["text"])
 
-    embs = model.encode(texts, normalize_embeddings=True).tolist()
-    coll.add(ids=ids, documents=texts, embeddings=embs, metadatas=metadatas)
+        ids_batch.append(f"{base_id}-{k}")
+        texts_batch.append(text)
+        metas_batch.append(meta)
+        k += 1
 
-    print(f"[OK] {p} → {len(ids)} chunks indexados")
-    return len(ids)
+        if len(ids_batch) >= EMBED_BATCH_SIZE:
+            total += _flush_batch(coll, model, ids_batch, texts_batch, metas_batch)
+            ids_batch.clear()
+            texts_batch.clear()
+            metas_batch.clear()
+
+    # flush final
+    total += _flush_batch(coll, model, ids_batch, texts_batch, metas_batch)
+
+    if total == 0:
+        print(f"[SKIP] {p} (no se pudo extraer texto)")
+        return 0
+
+    print(f"[OK] {p} → {total} chunks indexados")
+    return total
 
 
 def ingest_file_for_area(path: Path, area: Optional[str] = None) -> int:

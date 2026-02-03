@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from pathlib import Path as FsPath
 import unicodedata
+import shutil
 
 from fastapi import (
     FastAPI,
@@ -10,16 +11,16 @@ from fastapi import (
     status,
     UploadFile,
     File,
+    Request,
 )
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-# Lógica de RAG
 from rag_core import answer_with_rag
 
-# Autenticación y DB
 from auth import (
     get_db,
     get_current_user,
@@ -27,29 +28,47 @@ from auth import (
     create_access_token,
     get_user_by_email,
 )
-from models import User
+from models import User, Area
 from database import init_db
 
-# Ingesta de documentos
 from ingest import ingest_file_for_area
 
-# Inicializa la base de datos (crea tablas si no existen)
 init_db()
 
 app = FastAPI(title="Aria - Asistente Virtual")
 
 
 # -----------------------------
+# ERROR HANDLER: 422 -> 400 (faltan campos)
+# -----------------------------
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    missing_fields = []
+    for err in exc.errors():
+        if err.get("type") == "missing":
+            loc = err.get("loc") or []
+            if len(loc) >= 2 and loc[0] == "body":
+                missing_fields.append(str(loc[1]))
+    if missing_fields:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": f"Faltan campos: {', '.join(sorted(set(missing_fields)))}",
+                "code": "MISSING_FIELDS",
+                "fields": sorted(set(missing_fields)),
+            },
+        )
+    # fallback genérico
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": "Solicitud inválida", "code": "BAD_REQUEST"},
+    )
+
+
+# -----------------------------
 # HELPERS (áreas)
 # -----------------------------
 def normalize_area(area: Optional[str]) -> Optional[str]:
-    """
-    Normaliza área:
-    - lower
-    - quita acentos (logística -> logistica)
-    - espacios -> underscore
-    - si queda vacío -> None
-    """
     if not area:
         return None
     a = area.strip().lower()
@@ -59,21 +78,35 @@ def normalize_area(area: Optional[str]) -> Optional[str]:
 
 
 def user_has_access_to_area(user: User, area_slug: str) -> bool:
-    """Verifica si el usuario tiene acceso a un área."""
     if not area_slug:
         return True
     return any(a.slug == area_slug for a in user.areas)
 
 
+def area_exists(db: Session, area_slug: str) -> bool:
+    return db.query(Area).filter(Area.slug == area_slug).first() is not None
+
+
+def safe_filename(name: str) -> str:
+    # evita path traversal (../../)
+    return FsPath(name).name
+
+
 def save_uploaded_file(area: str, file: UploadFile) -> FsPath:
-    """Guarda el archivo subido en /data/docs/{area}/"""
+    """
+    Guarda el archivo subido en /data/docs/{area}/
+    - streaming (no carga todo a RAM)
+    - filename seguro
+    """
     base_dir = FsPath("/data/docs")
     area_dir = base_dir / area
     area_dir.mkdir(parents=True, exist_ok=True)
 
-    dest_path = area_dir / file.filename
+    filename = safe_filename(file.filename or "uploaded.bin")
+    dest_path = area_dir / filename
+
     with dest_path.open("wb") as f:
-        f.write(file.file.read())
+        shutil.copyfileobj(file.file, f)
 
     return dest_path
 
@@ -123,14 +156,36 @@ def api_login(
 ):
     """
     Login para el frontend.
-    Recibe JSON: {"username": "...", "password": "..."}
-    Devuelve: {"token": "...", "user_id": "...", "areas": [...]}
+    Requisitos de mensajes:
+    - Usuario no encontrado
+    - Contraseña incorrecta
+    - Faltan campos: ...
     """
-    user = get_user_by_email(db, data.username)
-    if not user or not verify_and_migrate_password(db, user, data.password):
+    username = (data.username or "").strip()
+    password = (data.password or "").strip()
+
+    missing = []
+    if not username:
+        missing.append("username")
+    if not password:
+        missing.append("password")
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Faltan campos: {', '.join(missing)}",
+        )
+
+    user = get_user_by_email(db, username)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales incorrectas"
+            detail="Usuario no encontrado",
+        )
+
+    if not verify_and_migrate_password(db, user, password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Contraseña incorrecta",
         )
 
     access_token = create_access_token(data={"sub": user.email})
@@ -145,7 +200,6 @@ def api_login(
 
 @app.get("/api/me", response_model=MeResponse)
 def api_me(current_user: User = Depends(get_current_user)):
-    """Devuelve datos del usuario actual."""
     return MeResponse(
         name=current_user.name,
         email=current_user.email,
@@ -153,14 +207,24 @@ def api_me(current_user: User = Depends(get_current_user)):
     )
 
 
+@app.get("/api/areas")
+def api_areas(current_user: User = Depends(get_current_user)):
+    """
+    Para poblar dropdown (slug + name).
+    """
+    return [{"slug": a.slug, "name": a.name} for a in current_user.areas]
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def api_chat(
     req: ChatRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Endpoint general de chat.
-    Permite área opcional en el body (req.area).
+    Requisito:
+    - si no se selecciona área -> general
+    - backend valida que el área exista; si no, error claro
     """
     if not req.query or not req.query.strip():
         raise HTTPException(
@@ -168,9 +232,15 @@ def api_chat(
             detail="La pregunta (query) no puede estar vacía."
         )
 
-    req_area = normalize_area(req.area)
+    req_area = normalize_area(req.area) or "general"
 
-    if req_area and not user_has_access_to_area(current_user, req_area):
+    if not area_exists(db, req_area):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Área no existe: {req_area}"
+        )
+
+    if not user_has_access_to_area(current_user, req_area):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes acceso a esta área"
@@ -200,34 +270,24 @@ def api_chat(
 def api_chat_by_area(
     area: str = Path(..., description="Área: logistica, ventas, sistemas, etc."),
     req: Optional[ChatRequest] = None,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Endpoint de chat por área específica.
-    El área viene en la ruta.
-    """
     area_norm = normalize_area(area)
-
     if not area_norm:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Área inválida"
-        )
+        raise HTTPException(status_code=400, detail="Área inválida")
+
+    if not area_exists(db, area_norm):
+        raise HTTPException(status_code=400, detail=f"Área no existe: {area_norm}")
 
     if not user_has_access_to_area(current_user, area_norm):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes acceso a esta área"
-        )
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
 
     query = req.query if req else None
     top_k = req.top_k if req and req.top_k is not None else 5
 
     if not query or not query.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La pregunta (query) no puede estar vacía."
-        )
+        raise HTTPException(status_code=400, detail="La pregunta (query) no puede estar vacía.")
 
     result = answer_with_rag(
         user_query=query,
@@ -235,10 +295,7 @@ def api_chat_by_area(
         area=area_norm,
     )
 
-    resp = ChatResponse(
-        answer=result["answer"],
-        area=result.get("area"),
-    )
+    resp = ChatResponse(answer=result["answer"], area=result.get("area"))
 
     if req and req.return_context:
         resp.context = result.get("context")
@@ -253,22 +310,18 @@ def api_chat_by_area(
 def api_upload_file(
     area: str = Path(..., description="Área del documento"),
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Sube un archivo para un área.
-    Requiere autenticación y acceso al área.
-    """
     area_norm = normalize_area(area)
-
     if not area_norm:
         raise HTTPException(status_code=400, detail="Área inválida")
 
+    if not area_exists(db, area_norm):
+        raise HTTPException(status_code=400, detail=f"Área no existe: {area_norm}")
+
     if not user_has_access_to_area(current_user, area_norm):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes acceso a esta área"
-        )
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
 
     dest_path = save_uploaded_file(area_norm, file)
 
@@ -280,12 +333,11 @@ def api_upload_file(
             detail=f"Error al ingestar el archivo: {e}",
         )
 
-    return {"status": "ok", "filename": file.filename, "area": area_norm}
+    return {"status": "ok", "filename": safe_filename(file.filename or ""), "area": area_norm}
 
 
 @app.get("/api/health")
 def api_health():
-    """Health check del backend."""
     return {"status": "ok", "service": "FastAPI + vLLM RAG (Aria)"}
 
 
@@ -301,11 +353,6 @@ if DIST_DIR.exists() and DIST_DIR.is_dir():
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        """
-        Sirve el frontend React.
-        - Si la ruta empieza con 'api/', retorna 404 (ya se manejó arriba)
-        - Para cualquier otra ruta, sirve index.html (SPA routing)
-        """
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
 

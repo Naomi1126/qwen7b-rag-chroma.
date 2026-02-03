@@ -7,10 +7,12 @@ import { useToast } from "@/hooks/use-toast";
 import type { Message } from "@/types/message";
 import type { Conversation } from "@/types/conversation";
 
+type AreaOption = { slug: string; name: string };
+
 export function ChatPage() {
   const { user, token, logout } = useAuth();
   const { toast } = useToast();
-  
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -18,12 +20,60 @@ export function ChatPage() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
 
-  // Cargar conversaciones (simulado por ahora - puedes implementar endpoint después)
+  const [areas, setAreas] = useState<AreaOption[]>([]);
+  const [selectedArea, setSelectedArea] = useState<string>(() => {
+    return localStorage.getItem("selected_area") || "general";
+  });
+
   useEffect(() => {
-    // Por ahora dejamos vacío el historial
-    // En el futuro puedes implementar GET /api/conversations
     setConversations([]);
   }, [token]);
+
+  // Cargar áreas del backend (slug + name) para dropdown
+  useEffect(() => {
+    const loadAreas = async () => {
+      if (!token) return;
+      try {
+        const res = await fetch("/api/areas", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!res.ok) {
+          // fallback a user.areas si existe
+          const fallback = (user?.areas || []).map((s) => ({
+            slug: s,
+            name: s.charAt(0).toUpperCase() + s.slice(1),
+          }));
+          setAreas(fallback);
+          return;
+        }
+
+        const data = await res.json();
+        setAreas(Array.isArray(data) ? data : []);
+
+        // si el área guardada ya no existe, usar general o primera
+        const exists = Array.isArray(data) && data.some((a) => a.slug === selectedArea);
+        if (!exists) {
+          const hasGeneral = Array.isArray(data) && data.some((a) => a.slug === "general");
+          const next = hasGeneral ? "general" : (data?.[0]?.slug || "general");
+          setSelectedArea(next);
+        }
+      } catch {
+        const fallback = (user?.areas || []).map((s) => ({
+          slug: s,
+          name: s.charAt(0).toUpperCase() + s.slice(1),
+        }));
+        setAreas(fallback);
+      }
+    };
+
+    loadAreas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  useEffect(() => {
+    localStorage.setItem("selected_area", selectedArea);
+  }, [selectedArea]);
 
   const handleSendMessage = async (content: string) => {
     if (!content.trim() || !token) return;
@@ -36,21 +86,20 @@ export function ChatPage() {
       conversationId: selectedConversationId || undefined,
     };
 
-    // Agregar mensaje del usuario inmediatamente
     setMessages((prev) => [...prev, userMessage]);
     setIsSendingMessage(true);
 
     try {
-      // Llamada al backend RAG
-      const response = await fetch('/api/chat', {
-        method: 'POST',
+      const response = await fetch("/api/chat", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           query: content,
           top_k: 5,
+          area: selectedArea, // ✅ se envía siempre
           return_context: false,
           return_sources: false,
         }),
@@ -58,12 +107,11 @@ export function ChatPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Error al enviar mensaje');
+        throw new Error(errorData.detail || "Error al enviar mensaje");
       }
 
       const data = await response.json();
 
-      // Agregar respuesta del bot
       const botMessage: Message = {
         id: `msg-bot-${Date.now()}`,
         content: data.answer,
@@ -74,7 +122,6 @@ export function ChatPage() {
 
       setMessages((prev) => [...prev, botMessage]);
 
-      // Crear conversación si es la primera vez
       if (!selectedConversationId) {
         const newConversation: Conversation = {
           id: `conv-${Date.now()}`,
@@ -85,16 +132,14 @@ export function ChatPage() {
         setConversations((prev) => [newConversation, ...prev]);
         setSelectedConversationId(newConversation.id);
       }
-
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error("Error sending message:", error);
       toast({
         title: "Error",
         description: error instanceof Error ? error.message : "No se pudo enviar el mensaje",
         variant: "destructive",
       });
 
-      // Mensaje de error del bot
       const errorMessage: Message = {
         id: `msg-error-${Date.now()}`,
         content: "Lo siento, hubo un error al procesar tu mensaje. Por favor intenta de nuevo.",
@@ -114,7 +159,6 @@ export function ChatPage() {
 
   const handleSelectConversation = (id: string) => {
     setSelectedConversationId(id);
-    // En el futuro: cargar mensajes de esa conversación desde el backend
     setMessages([]);
   };
 
@@ -140,18 +184,15 @@ export function ChatPage() {
         onLogout={handleLogout}
         userName={user?.name || user?.email || "Usuario"}
         isLoading={isLoadingConversations}
+        areas={areas}
+        selectedArea={selectedArea}
+        onChangeArea={setSelectedArea}
       />
-      
+
       <main className="flex-1 flex flex-col">
-        <ChatArea
-          messages={messages}
-          isLoading={isLoadingMessages}
-        />
-        
-        <ChatInput
-          onSendMessage={handleSendMessage}
-          disabled={isSendingMessage}
-        />
+        <ChatArea messages={messages} isLoading={isLoadingMessages} />
+
+        <ChatInput onSendMessage={handleSendMessage} disabled={isSendingMessage} />
       </main>
     </div>
   );

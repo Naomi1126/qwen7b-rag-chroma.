@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional
 
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
@@ -22,9 +22,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(6
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 # Password hashing (PBKDF2)
-
 PBKDF2_ITERATIONS = int(os.getenv("PBKDF2_ITERATIONS", "210000"))
-
 PBKDF2_PREFIX = "pbkdf2_sha256$"
 
 # Legacy bcrypt support
@@ -86,7 +84,6 @@ def _verify_pbkdf2(plain_password: str, password_hash: str) -> bool:
 
 
 def _looks_like_bcrypt(password_hash: str) -> bool:
-    
     return isinstance(password_hash, str) and password_hash.startswith("$2")
 
 
@@ -123,7 +120,7 @@ def verify_and_migrate_password(db: Session, user: User, plain_password: str) ->
     if ph.startswith(PBKDF2_PREFIX):
         return _verify_pbkdf2(plain_password, ph)
 
-    # 2) bcrypt legacy 
+    # 2) bcrypt legacy
     if _looks_like_bcrypt(ph) and _bcrypt_ctx is not None:
         try:
             ok = _bcrypt_ctx.verify(plain_password, ph)
@@ -155,7 +152,7 @@ def get_current_user(
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="No se pudo validar el token",
+        detail="Sesión expirada o token inválido",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
@@ -170,10 +167,3 @@ def get_current_user(
     if user is None:
         raise credentials_exception
     return user
-
-def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
-    user = get_user_by_email(db, email)
-    if not user:
-        return None
-    ok = verify_and_migrate_password(db, user, password)
-    return user if ok else None
