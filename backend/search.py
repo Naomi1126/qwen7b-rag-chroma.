@@ -28,6 +28,14 @@ _embedder: Optional[SentenceTransformer] = None
 _collection_cache: Dict[Tuple[str, str], Any] = {}
 
 
+def _normalize_area(area: Optional[str]) -> Optional[str]:
+    """Normalización ligera y segura del área (evita mismatches por mayúsculas/espacios)."""
+    if not area:
+        return None
+    a = str(area).strip().lower()
+    return a or None
+
+
 def _get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
@@ -52,6 +60,8 @@ def _get_collection(area: Optional[str] = None):
         path = BASE_CHROMA_DIR / area
         collection_name = BASE_COLLECTION_NAME + "_" + area
     """
+    area = _normalize_area(area)
+
     if area:
         chroma_dir = os.path.join(BASE_CHROMA_DIR, area)
         collection_name = f"{BASE_COLLECTION_NAME}_{area}"
@@ -64,7 +74,19 @@ def _get_collection(area: Optional[str] = None):
         return _collection_cache[key]
 
     client = chromadb.PersistentClient(path=chroma_dir)
-    coll = client.get_or_create_collection(name=collection_name)
+
+    # ✅ Importante: NO crear colecciones vacías silenciosamente
+    # Si no existe, queremos enterarnos por logs / error.
+    try:
+        coll = client.get_collection(name=collection_name)
+    except Exception as e:
+        print(
+            f"[SEARCH] ERROR: No se pudo abrir colección '{collection_name}' en '{chroma_dir}'. "
+            f"Esto suele indicar mismatch de ruta/nombre o que no está indexado. Detalle: {e}",
+            file=sys.stderr,
+        )
+        raise
+
     _collection_cache[key] = coll
     return coll
 
@@ -89,6 +111,7 @@ def list_indexed_areas() -> List[str]:
 def search_docs(query: str, top_k: int = 5, area: Optional[str] = None) -> List[Dict[str, Any]]:
     if area is None:
         area = DEFAULT_AREA
+    area = _normalize_area(area)
 
     collection = _get_collection(area)
 
@@ -129,6 +152,7 @@ def search_exact(field: str, value: str, top_k: int = 50, area: Optional[str] = 
         return []
     if area is None:
         area = DEFAULT_AREA
+    area = _normalize_area(area)
 
     collection = _get_collection(area)
     where = {field: value}

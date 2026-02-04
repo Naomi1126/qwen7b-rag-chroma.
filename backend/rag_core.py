@@ -36,7 +36,8 @@ _SMALLTALK_PATTERNS = [
     r"^holi$",
 ]
 
-CONTAINER_RE = re.compile(r"\b(?:MSMU|BMOU|TGHU|CAIU|MSCU|OOLU|TEMU)[A-Z0-9]{6,}\b", re.I)
+# Contenedor ISO típico: 4 letras + 7 dígitos (ej: CCLU7960670, CSNU8495307, EGSU6366586, UETU6485174)
+CONTAINER_RE = re.compile(r"\b[A-Z]{4}\d{7}\b", re.I)
 
 
 def _normalize(text: str) -> str:
@@ -60,9 +61,22 @@ def is_greeting(query: str) -> bool:
 
 
 def detect_exact_lookup(query: str) -> Optional[Dict[str, str]]:
-    m = CONTAINER_RE.search(query)
+    q = query.strip().upper()
+
+    # 1) contenedor ISO
+    m = CONTAINER_RE.search(q)
     if m:
         return {"field": "contenedor", "value": m.group(0).upper()}
+
+    # 2) si parece un identificador sin espacios (PI, remisión, etc.)
+    # ejemplo: MTC20250619001
+    if " " not in q and len(q) >= 8 and any(c.isalpha() for c in q) and any(c.isdigit() for c in q):
+        return {"field": "pi", "value": q}
+
+    # 3) si parece factura numérica (ej: 91827.2)
+    if " " not in q and len(q) <= 16 and all(c.isdigit() or c == "." for c in q) and any(c.isdigit() for c in q):
+        return {"field": "factura", "value": q}
+
     return None
 
 
@@ -106,6 +120,20 @@ def build_context(query: str, top_k: int = 5, area: Optional[str] = None) -> Dic
     if not results:
         results = search_docs(query, top_k=top_k, area=area_norm)
         results = _ensure_area_in_meta(results, area_norm)
+
+        # 2b) Si embeddings no trajo nada y el query parece un identificador, intenta exact match por campos comunes
+        if not results:
+            q = query.strip().upper()
+            if " " not in q and len(q) >= 6:
+                for fld in ("contenedor", "pi", "factura", "remision", "modelo"):
+                    try:
+                        results = search_exact(fld, q, top_k=max(top_k, 50), area=area_norm)
+                        results = _ensure_area_in_meta(results, area_norm)
+                        if results:
+                            print(f"[RAG] Fallback exact match funcionó → {fld}={q}")
+                            break
+                    except Exception as e:
+                        print(f"[RAG] WARN fallback exact ({fld}) falló: {e}", file=sys.stderr)
 
     detected_area: Optional[str] = None
     if results:
