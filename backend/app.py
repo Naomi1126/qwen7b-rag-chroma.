@@ -1,3 +1,5 @@
+import os
+import threading
 from typing import Optional, List, Dict, Any
 from pathlib import Path as FsPath
 import unicodedata
@@ -33,9 +35,27 @@ from database import init_db
 
 from ingest import ingest_file_for_area
 
+# -----------------------------
+# INIT
+# -----------------------------
 init_db()
 
 app = FastAPI(title="Aria - Asistente Virtual")
+
+# -----------------------------
+# CONCURRENCY GUARD (evita saturación vLLM)
+# -----------------------------
+MAX_LLM_CONCURRENCY = int(os.getenv("MAX_LLM_CONCURRENCY", "1"))
+LLM_SEMAPHORE = threading.Semaphore(MAX_LLM_CONCURRENCY)
+LLM_ACQUIRE_TIMEOUT = float(os.getenv("LLM_ACQUIRE_TIMEOUT", "2.0"))
+
+# Defaults y límites (para evitar prompts gigantes)
+DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "3"))
+MAX_TOP_K = int(os.getenv("MAX_TOP_K", "6"))
+
+DEFAULT_MAX_TOKENS = int(os.getenv("DEFAULT_MAX_TOKENS", "128"))
+MAX_MAX_TOKENS = int(os.getenv("MAX_MAX_TOKENS", "256"))
+MIN_MAX_TOKENS = int(os.getenv("MIN_MAX_TOKENS", "16"))
 
 
 # -----------------------------
@@ -120,6 +140,9 @@ class ChatRequest(BaseModel):
     area: Optional[str] = None
     return_context: Optional[bool] = False
     return_sources: Optional[bool] = False
+
+    # opcional: permite que el frontend sugiera max_tokens sin tocar rag_core.py
+    max_tokens: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -215,6 +238,24 @@ def api_areas(current_user: User = Depends(get_current_user)):
     return [{"slug": a.slug, "name": a.name} for a in current_user.areas]
 
 
+def _sanitize_top_k(val: Optional[int]) -> int:
+    try:
+        x = int(val) if val is not None else DEFAULT_TOP_K
+    except Exception:
+        x = DEFAULT_TOP_K
+    x = max(1, min(x, MAX_TOP_K))
+    return x
+
+
+def _sanitize_max_tokens(val: Optional[int]) -> int:
+    try:
+        x = int(val) if val is not None else DEFAULT_MAX_TOKENS
+    except Exception:
+        x = DEFAULT_MAX_TOKENS
+    x = max(MIN_MAX_TOKENS, min(x, MAX_MAX_TOKENS))
+    return x
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def api_chat(
     req: ChatRequest,
@@ -225,6 +266,10 @@ def api_chat(
     Requisito:
     - si no se selecciona área -> general
     - backend valida que el área exista; si no, error claro
+    Protecciones:
+    - limitar top_k
+    - limitar max_tokens
+    - semáforo de concurrencia para evitar saturación del LLM
     """
     if not req.query or not req.query.strip():
         raise HTTPException(
@@ -246,24 +291,71 @@ def api_chat(
             detail="No tienes acceso a esta área"
         )
 
-    result = answer_with_rag(
-        user_query=req.query,
-        top_k=req.top_k or 5,
-        area=req_area,
-    )
+    top_k = _sanitize_top_k(req.top_k)
+    max_tokens = _sanitize_max_tokens(req.max_tokens)
 
-    resp = ChatResponse(
-        answer=result["answer"],
-        area=result.get("area"),
-    )
+    acquired = LLM_SEMAPHORE.acquire(timeout=LLM_ACQUIRE_TIMEOUT)
+    if not acquired:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "code": "BUSY",
+                    "message": "El asistente está ocupado procesando otra solicitud. Intenta de nuevo en unos segundos."
+                }
+            },
+        )
 
-    if req.return_context:
-        resp.context = result.get("context")
+    try:
+        # Controlar tokens sin tocar internamente rag_core: seteamos env para esta llamada
+        os.environ["RAG_MAX_COMPLETION_TOKENS"] = str(max_tokens)
 
-    if req.return_sources:
-        resp.sources = result.get("sources")
+        result = answer_with_rag(
+            user_query=req.query,
+            top_k=top_k,
+            area=req_area,
+        )
 
-    return resp
+        resp = ChatResponse(
+            answer=result["answer"],
+            area=result.get("area"),
+        )
+
+        if req.return_context:
+            resp.context = result.get("context")
+
+        if req.return_sources:
+            resp.sources = result.get("sources")
+
+        return resp
+
+    except RuntimeError as e:
+        msg = str(e)
+
+        # Timeout controlado del LLM/RAG
+        if "tardando" in msg.lower() or "timeout" in msg.lower() or "read timed out" in msg.lower():
+            return JSONResponse(
+                status_code=504,
+                content={"error": {"code": "LLM_TIMEOUT", "message": msg}},
+            )
+
+        return JSONResponse(
+            status_code=502,
+            content={"error": {"code": "LLM_ERROR", "message": msg}},
+        )
+
+    except Exception:
+        # No filtramos detalles internos aquí
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "Error interno del servidor."}},
+        )
+
+    finally:
+        try:
+            LLM_SEMAPHORE.release()
+        except Exception:
+            pass
 
 
 @app.post("/api/chat/{area}", response_model=ChatResponse)
@@ -284,26 +376,66 @@ def api_chat_by_area(
         raise HTTPException(status_code=403, detail="No tienes acceso a esta área")
 
     query = req.query if req else None
-    top_k = req.top_k if req and req.top_k is not None else 5
+    top_k = _sanitize_top_k(req.top_k if req else None)
+    max_tokens = _sanitize_max_tokens(req.max_tokens if req else None)
 
     if not query or not query.strip():
         raise HTTPException(status_code=400, detail="La pregunta (query) no puede estar vacía.")
 
-    result = answer_with_rag(
-        user_query=query,
-        top_k=top_k,
-        area=area_norm,
-    )
+    acquired = LLM_SEMAPHORE.acquire(timeout=LLM_ACQUIRE_TIMEOUT)
+    if not acquired:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "code": "BUSY",
+                    "message": "El asistente está ocupado procesando otra solicitud. Intenta de nuevo en unos segundos."
+                }
+            },
+        )
 
-    resp = ChatResponse(answer=result["answer"], area=result.get("area"))
+    try:
+        os.environ["RAG_MAX_COMPLETION_TOKENS"] = str(max_tokens)
 
-    if req and req.return_context:
-        resp.context = result.get("context")
+        result = answer_with_rag(
+            user_query=query,
+            top_k=top_k,
+            area=area_norm,
+        )
 
-    if req and req.return_sources:
-        resp.sources = result.get("sources")
+        resp = ChatResponse(answer=result["answer"], area=result.get("area"))
 
-    return resp
+        if req and req.return_context:
+            resp.context = result.get("context")
+
+        if req and req.return_sources:
+            resp.sources = result.get("sources")
+
+        return resp
+
+    except RuntimeError as e:
+        msg = str(e)
+        if "tardando" in msg.lower() or "timeout" in msg.lower() or "read timed out" in msg.lower():
+            return JSONResponse(
+                status_code=504,
+                content={"error": {"code": "LLM_TIMEOUT", "message": msg}},
+            )
+        return JSONResponse(
+            status_code=502,
+            content={"error": {"code": "LLM_ERROR", "message": msg}},
+        )
+
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "Error interno del servidor."}},
+        )
+
+    finally:
+        try:
+            LLM_SEMAPHORE.release()
+        except Exception:
+            pass
 
 
 @app.post("/api/upload/{area}")

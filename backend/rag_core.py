@@ -14,7 +14,12 @@ VLLM_MODEL_NAME = os.getenv("VLLM_MODEL_NAME", "Qwen/Qwen2.5-3B-Instruct")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "dummy-key")
 
 MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "12000"))
-MAX_COMPLETION_TOKENS = int(os.getenv("RAG_MAX_COMPLETION_TOKENS", "512"))
+# Default más conservador para evitar respuestas largas y latencias altas
+MAX_COMPLETION_TOKENS = int(os.getenv("RAG_MAX_COMPLETION_TOKENS", "128"))
+
+# Timeouts configurables por env (para evitar 120s hardcodeado)
+VLLM_TIMEOUT_SECONDS = int(os.getenv("VLLM_TIMEOUT_SECONDS", "300"))          # read timeout
+VLLM_CONNECT_TIMEOUT_SECONDS = int(os.getenv("VLLM_CONNECT_TIMEOUT_SECONDS", "10"))  # connect timeout
 
 ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Aria")
 
@@ -209,11 +214,23 @@ def call_model_with_context(user_query: str, context: str, area: Optional[str] =
     print(f"[RAG] Modelo: {VLLM_MODEL_NAME}")
     print(f"[RAG] max_tokens: {MAX_COMPLETION_TOKENS}")
     print(f"[RAG] Longitud de contexto: {len(context)} caracteres")
+    print(f"[RAG] Timeout connect/read: {VLLM_CONNECT_TIMEOUT_SECONDS}s / {VLLM_TIMEOUT_SECONDS}s")
 
     try:
-        resp = requests.post(VLLM_API_URL, json=payload, headers=headers, timeout=120)
+        resp = requests.post(
+            VLLM_API_URL,
+            json=payload,
+            headers=headers,
+            timeout=(VLLM_CONNECT_TIMEOUT_SECONDS, VLLM_TIMEOUT_SECONDS),
+        )
         resp.raise_for_status()
         data = resp.json()
+    except requests.exceptions.ReadTimeout as e:
+        print(f"[RAG] TIMEOUT al llamar a vLLM: {e}", file=sys.stderr)
+        raise RuntimeError(
+            "El modelo está tardando más de lo normal. Intenta con una pregunta más específica "
+            "o reduce top_k."
+        ) from e
     except RequestException as e:
         print(f"[RAG] ERROR al llamar a vLLM: {e}", file=sys.stderr)
         raise RuntimeError(f"Error al llamar al modelo vLLM: {e}") from e
